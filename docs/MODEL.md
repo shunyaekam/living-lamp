@@ -1,127 +1,94 @@
-# The model behind the lamp (draft for review)
+# The model behind the lamp (draft 2, for review)
 
-Status: **design, nothing built**. Each rule below is derived from a principle; if a rule looks wrong, argue with the
-principle. Statements marked **[ASSUMPTION]** are not established and must not be reported as fact.
+Status: **design, nothing built**. This replaces draft 1, which assumed solar time, a three-part emotion latent and a
+fixed day length. Those were assumptions the model should not need. Statements marked **[ASSUMPTION]** are not
+established.
 
-## 1. What the lamp is, in one paragraph
+## 1. The idea
 
-A small stochastic process (the *brainstem*) that wanders inside hard limits. Anything that wants to influence it,
-whether the time of day, the sun, the weather, a stock, music, a screen or an agent, is a **feed**: a stream of data
-that pulls the process toward a target. The lamp also **learns what the feeds have been asking for at each time of
-day**, so when the feeds go quiet it keeps behaving as they taught it. Time is an input, not a state.
+The lamp is a small dynamical system that exists on its own, and the world pulls on it. Time of day, weather, music, a
+screen and an agent are all the same thing: data. Nothing in the model knows what a day is.
+
+```
+x[t+1] = A x[t] + B u[t] + noise
+         its own     the world
+         existence   pulling on it
+```
+
+- `x`: the lamp's internal state, a few numbers.
+- `A`: how the state evolves by itself. With no data (`u = 0`) it keeps running, kept moving by the noise.
+- `u`: the world's data at that moment, any number of feeds, each one a coordinate of `u`.
+- `B`: how strongly each feed pulls on each part of the state.
+- **Alignment** means adjusting `A` and `B` so the lamp predicts what comes next.
+
+A rhythm is not put in. If the data repeats every 24 hours, the learned `A` has a rotation with a 24 hour period; if
+every 25 hours or every week, that is what it learns. When the feeds stop, `A` keeps running, so the lamp behaves as the
+data taught it. Time enters only as the length of a step, `dt`, which is the lamp's own elapsed time.
 
 ## 2. Principles
 
-**P1. Limits are enforced, never learned.** Brightness ceiling, reversal rate, always-glide, habituation. Learning
-moves the lamp only inside the space these allow, so no feed, learned value or bug can make it flash or glare.
-*Test:* property tests that drive the model with adversarial feeds (jumps, noise, NaN, huge values) and assert the
-output limits hold in every frame.
+**P1. As few assumptions as possible, listed.** The ledger is in section 4. Anything not on it is not in the model.
 
-**P2. One interface for all influence.** A feed is a timestamped signal with a declared mapping into the lamp's own
-latent state (section 3). There are no special cases per source; campfire, weather and the screen are mappings, not
-code paths. A feed is either **continuous** (a value that sets a target) or **discrete** (an event that causes a
-poke). *Test:* every existing mood and the screen mimic can be expressed as a feed with no extra code.
+**P2. Limits are enforced, never learned.** Brightness ceiling, reversal rate, glides, habituation, and stability of
+`A` (no eigenvalue grows). They belong to the lamp, not the model, and hold in every frame whatever is learned.
+*Test:* property tests with adversarial feeds (jumps, noise, NaN, huge values).
 
-**P3. Few latent dimensions, fixed rendering.** The state is three numbers (section 3), and a fixed hand-written map
-turns them into colour and level. The learner never sees the colour, so it cannot learn an ugly colour.
-**[ASSUMPTION]** Three dimensions are enough to express every mood we have. *Test:* reproduce each mood from its
-latent target and compare to its current output.
+**P3. Exact in time.** The model is written in continuous time, `dx = F x dt + G u dt + noise`, and stepped with the
+exact discretisation `A = exp(F dt)`. Its statistics then do not depend on the frame rate.
+*Test:* long runs at 10 and 60 fps have the same mean, spread and autocorrelation.
 
-**P4. Time is an input, as a phase, not a timestamp.** The model is a *cyclostationary* process: its statistics repeat
-with the day. We give it phases (angles on a circle), never raw clock time. This makes the function periodic and
-smooth by construction, and it removes the hourly-slot problem of neighbouring slots disagreeing.
+**P4. Learning is plain prediction.** The objective is the squared error of predicting the next data from the current
+state. No other reward. *Test:* synthetic data with a known period; the learned period converges to it.
 
-**P5. Do not claim what the data cannot show.** Solar time and clock time differ by a nearly constant offset within a
-season, so for weeks their effects cannot be told apart. They separate only through the equation of time (about
-16 minutes over the year), a daylight-saving change (the clock jumps an hour, the sun does not) or travel. So: start
-with solar features, which are physical and location-aware, add one clock feature for habit, and fit both with a
-shrinkage penalty so collinear weights share the load instead of fighting. Report which one the data prefers only
-after a daylight-saving change or after enough weeks to measure it.
+**P5. No hallucinated structure.** With pure-noise data the learned dynamics stay near their prior (small, decaying).
+*Test:* feed noise; assert no rotation grows.
 
-**P6. Start from today's behaviour and move only with evidence.** The prior is the current hand-set day curve. With
-no data the lamp behaves exactly as it does now. Each observation shifts the learned curve by an amount that depends
-on how much data there is (a Bayesian ridge prior), never by a fixed jump.
+**P6. Persistence and forgetting.** Remove the feeds and the lamp keeps its learned behaviour, then relaxes to the prior
+over a stated half-life. *Test:* learn a rhythm, stop the data, assert the rhythm continues and then fades.
 
-**P7. Randomness has a stated law.** The brainstem is a mean-reverting (Ornstein-Uhlenbeck) process: for each latent
-dimension we state its mean, its stationary spread and its correlation time. Nothing else about the randomness is
-free. It is stepped with the exact discretisation, so its statistics do not depend on the frame rate.
-*Test:* long runs at 10 and 60 fps have the same mean, spread and autocorrelation to within sampling error.
+**P7. Observable and resettable.** The learned `A` and `B`, with each mode's period and decay, can be printed and wiped.
 
-**P8. Learning is bounded, observable and resettable.** The learned offset from the prior is clipped to a stated
-range, decays back to the prior when feeds are absent for weeks, can be printed (`status`) and can be wiped
-(`forget`). A learner you cannot inspect cannot be trusted or debugged.
+**P8. Earn every addition.** A piece (a nonlinearity, more modes, a feed) is added only if it improves prediction on
+data the model has not seen. This is the project's rule that a tool is added only if its output changes a decision.
 
-**P9. Every added piece must beat a simpler one, measured.** Learning is judged by held-out prediction error of the
-feed-driven target from time alone, against a constant (global) model. If time features do not beat the constant on
-days the model has not seen, they are removed. This is the project's rule that a tool is added only if its output
-changes a decision.
+**P9. Authority is a strict order.** A person, then an agent, then the model's own state. A higher layer wins outright.
 
-**P10. Authority is a strict order; blending is soft.** Person, then agent, then feeds, then learned imprint, then
-prior. A higher layer wins outright. Within the feed layer, targets are blended by weight, so the output stays inside
-the convex hull of the targets.
+## 3. Learning, honestly
 
-## 3. The model
+The hard part is that `x` is hidden: we see the data `u`, not the state. Two workable forms, to be chosen by replay
+tests and not by taste:
 
-**Latent state** `z = (warmth, arousal, level)`, each in `[-1, 1]`. The colour-emotion literature ties pleasure to
-brightness and arousal to saturation, and hue weakly **[ASSUMPTION: the hue effect is small and varies by person]**;
-that is why the latent is these three and not hue directly.
+1. **Diagonal modes.** `A` is a set of independent damped rotations, each with a frequency and a decay rate. Each mode
+   adapts its frequency to lock onto a rhythm in the data (adaptive-frequency oscillators). This is the cheapest and is
+   my starting guess. Its assumption: the rhythms are independent, and each is a sinusoid. Sharp shapes such as a
+   sunrise then need several modes (harmonics), added only under P8.
+2. **General `A`.** Estimate the full matrix from a window of data by standard system identification. More flexible,
+   heavier, harder to keep stable.
 
-**Brainstem (per dimension, exact step over `dt`):**
+A feed with no rhythm gives no mode anything to lock to, and the lamp simply keeps wandering. That is correct.
 
-```
-z' = mu + exp(-dt/tau) * (z - mu) + sigma * sqrt(1 - exp(-2 dt/tau)) * N(0,1)
-```
+## 4. The ledger of assumptions
 
-`tau` is the correlation time (how slowly it wanders) and `sigma` the spread; both are personality, fixed by mood.
+1. The number of state variables `n`. **[ASSUMPTION]** start small, for example 6 (three modes).
+2. The dynamics are linear. Richer shapes come from more modes first, and from nonlinearity only if P8 demands it.
+3. The noise is Gaussian.
+4. "Aligned" means "predicts well" (P4).
+5. A fixed readout from state to light, plus the limits of P2. These are about the lamp and not the model, so they
+   cannot be learned away.
 
-**The mean `mu(t)`** is the layered target of P10:
+## 5. Where this model is weakest
 
-```
-mu(t) = layer( person, agent, blend(feeds), imprint(t), prior(t) )
-imprint(t) = prior(t) + Phi(t)^T w          clipped to +/- delta of the prior
-```
+- **Predicting is not expressing.** The model learns to predict its feeds. The light is a fixed readout of the state, so
+  a feed pulls the light, but which way "up" goes is a choice in the readout, not something the data decides. We may
+  also let a person's reactions (a poke, an override, a "like") steer the readout. That is a second, later loop.
+- **Hidden state.** Section 3 is an open technical choice.
+- **Meaning.** The model does not know what a feed means. If we want "a stock fell, so it should look uneasy", that is
+  an assumption we would add on purpose and list.
 
-**Features** `Phi(t)` are 8 numbers: a constant, `sin` and `cos` of 1, 2 and 3 times the solar hour angle, and the sine
-of the sun's elevation. A clock-phase version of the harmonics is added as a second block (P5). The constant is the
-"global" model, and the harmonics are the "time-based" one, so global versus time is not a choice.
+## 6. Build order
 
-**Learning.** While a continuous feed is present it supplies a target `z*` for `z`. We update `w` by recursive least
-squares with forgetting factor `lambda` toward the prior (a Bayesian ridge). The features are shared by the three
-dimensions, so there is one 8x8 matrix and three weight vectors: a few hundred bytes. When the feed stops, `mu(t)`
-keeps using `imprint(t)`: the lamp keeps behaving "like solar", which is the behaviour you described.
-
-**Solar phase (no network).** From latitude, longitude and UTC: declination from the day of year, the equation of
-time (a standard approximation, accurate to a minute or two, to be checked against published almanac values), hour
-angle from true solar time, elevation `sin(e) = sin(lat) sin(dec) + cos(lat) cos(dec) cos(h)`. *Tests:* at an
-equinox the noon elevation is `90 - lat`; at a solstice it is `90 - lat` plus or minus 23.44 degrees.
-
-**Arbitration weights** for the feed layer: `c_f` proportional to `priority_f * exp(-age_f / tau_f)` (a stale feed
-fades out), normalised, with the imprint as a fixed-weight competitor so that no feed reaches 100% unless it carries
-agent authority. **[ASSUMPTION]** Fixed priorities are enough to start; learned interest is a later experiment.
-
-## 4. How we will know it works
-
-All offline, deterministic, no lamp needed. The core is already deterministic, so feeds can be recorded and replayed
-faster than real time.
-
-1. **Recovery.** Feed a synthetic daily shape for N days. The learned `imprint(t)` recovers it within a stated error.
-2. **No hallucination.** Feed pure noise. The learned harmonics stay near zero (the ridge prior holds).
-3. **Persistence.** Remove the feed. The lamp keeps the learned shape, then decays to the prior over the stated
-   half-life.
-4. **Frame-rate invariance** and the **limit properties** of P1 and P7.
-5. **Held-out skill (P9).** On days not used for fitting, time features have lower error than the constant model.
-
-Only after these pass do we run it on the real lamp, and then we ask one question per test.
-
-## 5. Build order
-
-Each step is useful alone and is merged only when its tests pass: (1) the solar function; (2) latent state, mean
-reversion and rendering, matching today's moods; (3) the learner and the replay harness; (4) the feed channel and
-arbitration; (5) the first feeds (solar, ping), then weather and music.
-
-## 6. Open questions
-
-- The lamp's rough location (latitude and longitude, to about a degree is enough).
-- Whether `delta`, `lambda` and the clock-phase block are set by you or found by the held-out test.
-- How the three-dimensional latent should render hue on an RGB-only strip whose reds, greens and blues are unequal
-  (the white balance is `[0.85, 1, 0.75]`).
+1. The state-space core with exact stepping and limits (P2, P3), driven by synthetic data and replayed faster than real
+   time.
+2. Mode learning with its tests (P4 to P6).
+3. A readout to the lamp that reproduces today's calm behaviour from the model alone.
+4. The feed channel, then the first real feeds.
