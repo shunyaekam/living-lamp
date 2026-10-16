@@ -1,94 +1,101 @@
-# The model behind the lamp (draft 2, for review)
+# The model behind the lamp (draft 3, for review)
 
-Status: **design, nothing built**. This replaces draft 1, which assumed solar time, a three-part emotion latent and a
-fixed day length. Those were assumptions the model should not need. Statements marked **[ASSUMPTION]** are not
-established.
+Status: **design, nothing built**. It replaces drafts 1 and 2. Statements marked **[ASSUMPTION]** are not established.
 
 ## 1. The idea
 
-The lamp is a small dynamical system that exists on its own, and the world pulls on it. Time of day, weather, music, a
-screen and an agent are all the same thing: data. Nothing in the model knows what a day is.
+An organism with four layers, in order of how fast they change:
 
 ```
-x[t+1] = A x[t] + B u[t] + noise
-         its own     the world
-         existence   pulling on it
+L0  AUTONOMIC     fixed laws: smooth transitions, breathing, limits.             never learned
+L1  SPONTANEOUS   a random process that keeps it alive on its own.              the default
+L2  ALIGNMENT     feed data pulls the state along, for a while.                 fast, temporary
+L3  IMPRINT       what it was pulled through changes L1, so its "random"        slow, lasting
+                  behaviour afterwards carries traces of that experience.
 ```
 
-- `x`: the lamp's internal state, a few numbers.
-- `A`: how the state evolves by itself. With no data (`u = 0`) it keeps running, kept moving by the noise.
-- `u`: the world's data at that moment, any number of feeds, each one a coordinate of `u`.
-- `B`: how strongly each feed pulls on each part of the state.
-- **Alignment** means adjusting `A` and `B` so the lamp predicts what comes next.
+Everything outside the lamp is a feed: weather, music, a screen, an agent, the sun. Nothing in the model knows what a
+day is, what the sun is, or what a clock says. **The frame of reference is the lamp's own state**: an imprint says "when
+I was in this state, the world pulled me this way". Time enters only as the length of a step.
 
-A rhythm is not put in. If the data repeats every 24 hours, the learned `A` has a rotation with a 24 hour period; if
-every 25 hours or every week, that is what it learns. When the feeds stop, `A` keeps running, so the lamp behaves as the
-data taught it. Time enters only as the length of a step, `dt`, which is the lamp's own elapsed time.
+## 2. The laws
 
-## 2. Principles
+`x` is the lamp's own state: a few numbers, fully known to the lamp (nothing about it is hidden).
 
-**P1. As few assumptions as possible, listed.** The ledger is in section 4. Anything not on it is not in the model.
+```
+L1  dx = f(x) dt + sigma dW                      f(x) = -K (x - m) + sum_j theta_j phi_j(x)
+L2  dx = f(x) dt + sum_feeds B_f u_f(t) dt + sigma dW      (while feeds are present)
+L3  d theta = eps * ( dx/dt - f(x) ) * phi(x)            (only while a feed is present)
+            - theta / H                                   (slow forgetting)
+L0  light = Limit( Readout(x) ) + breathing(t)
+```
 
-**P2. Limits are enforced, never learned.** Brightness ceiling, reversal rate, glides, habituation, and stability of
-`A` (no eigenvalue grows). They belong to the lamp, not the model, and hold in every frame whatever is learned.
-*Test:* property tests with adversarial feeds (jumps, noise, NaN, huge values).
+- `f` starts as plain mean reversion (`theta = 0`), so a newborn lamp is just the random process of L1. The `phi_j`
+  are a small fixed set of functions of `x` only, so memory is indexed by the lamp's own state and nothing else.
+- Aligned, the feed's push `B_f u_f` is added to the drift. Because `f` pulls back, alignment fades when the feed stops.
+- **Imprint is regression of the observed drift on the state.** It learns the average push the world gave at each state,
+  so it teaches the free-running model to do on its own what the feed made it do. `eps` is small, so only repeated
+  patterns leave a mark.
+- `Limit` and `breathing` are L0: smoothing, brightness ceiling, reversal cap and a fixed breathing wave. They are applied
+  to whatever the lower layers produce and are never learned.
 
-**P3. Exact in time.** The model is written in continuous time, `dx = F x dt + G u dt + noise`, and stepped with the
-exact discretisation `A = exp(F dt)`. Its statistics then do not depend on the frame rate.
-*Test:* long runs at 10 and 60 fps have the same mean, spread and autocorrelation.
+## 3. Why a rhythm can appear without a clock
 
-**P4. Learning is plain prediction.** The objective is the squared error of predicting the next data from the current
-state. No other reward. *Test:* synthetic data with a known period; the learned period converges to it.
+Driven by a periodic feed, the state traces a closed loop. L3 learns the drift along that loop, so when the feed is
+gone the free-running state keeps travelling the same loop: a learned limit cycle. Its period comes from how fast the
+state was carried round while driven. A loop needs at least two state dimensions (a single dimension cannot
+oscillate), and the state needs a timescale comparable to the rhythm. So the lamp can learn only rhythms its own
+timescales span. **[ASSUMPTION]** a spread of relaxation times (seconds to hours) in `K`, chosen once.
 
-**P5. No hallucinated structure.** With pure-noise data the learned dynamics stay near their prior (small, decaying).
-*Test:* feed noise; assert no rotation grows.
+## 4. Principles, each with a test
 
-**P6. Persistence and forgetting.** Remove the feeds and the lamp keeps its learned behaviour, then relaxes to the prior
-over a stated half-life. *Test:* learn a rhythm, stop the data, assert the rhythm continues and then fades.
+**P1. Limits are enforced, never learned (L0).** *Test:* adversarial feeds (jumps, noise, NaN, huge values) never break
+the ceiling, the reversal cap or the glides, in any frame.
 
-**P7. Observable and resettable.** The learned `A` and `B`, with each mode's period and decay, can be printed and wiped.
+**P2. Imprint learns only from being driven.** With no feed, `theta` changes only by forgetting. Otherwise the lamp
+would train on its own noise and hallucinate structure. *Test:* run alone for weeks; `theta` stays at its prior.
 
-**P8. Earn every addition.** A piece (a nonlinearity, more modes, a feed) is added only if it improves prediction on
-data the model has not seen. This is the project's rule that a tool is added only if its output changes a decision.
+**P3. Noise leaves no mark.** A feed with no structure relative to the state averages out. *Test:* drive with white
+noise; `theta` stays near zero.
 
-**P9. Authority is a strict order.** A person, then an agent, then the model's own state. A higher layer wins outright.
+**P4. Rehearsal matters.** One episode leaves a faint trace; repetition builds a lasting one. *Test:* trace strength
+grows with the number of episodes, and fades with half-life `H` when they stop.
 
-## 3. Learning, honestly
+**P5. Persistence.** After repeated driving by a periodic feed and then removing it, the free-running lamp keeps a
+rhythm near the driven period, and keeps it longer than a lamp with no imprint. *Test:* synthetic sinusoid.
 
-The hard part is that `x` is hidden: we see the data `u`, not the state. Two workable forms, to be chosen by replay
-tests and not by taste:
+**P6. Exact in time.** Stepped with the exact solution for the linear part, so statistics do not depend on the frame
+rate. *Test:* long runs at 10 and 60 fps agree in mean, spread and autocorrelation.
 
-1. **Diagonal modes.** `A` is a set of independent damped rotations, each with a frequency and a decay rate. Each mode
-   adapts its frequency to lock onto a rhythm in the data (adaptive-frequency oscillators). This is the cheapest and is
-   my starting guess. Its assumption: the rhythms are independent, and each is a sinusoid. Sharp shapes such as a
-   sunrise then need several modes (harmonics), added only under P8.
-2. **General `A`.** Estimate the full matrix from a window of data by standard system identification. More flexible,
-   heavier, harder to keep stable.
+**P7. Bounded and observable.** `theta` is norm-bounded, can be printed and can be wiped.
 
-A feed with no rhythm gives no mode anything to lock to, and the lamp simply keeps wandering. That is correct.
+**P8. Earn every addition.** More basis functions, more state dimensions or a nonlinearity are added only if they
+improve behaviour on data the model has not seen.
 
-## 4. The ledger of assumptions
+**P9. Authority is a strict order.** A person, then an agent, then the lamp's own dynamics.
 
-1. The number of state variables `n`. **[ASSUMPTION]** start small, for example 6 (three modes).
-2. The dynamics are linear. Richer shapes come from more modes first, and from nonlinearity only if P8 demands it.
-3. The noise is Gaussian.
-4. "Aligned" means "predicts well" (P4).
-5. A fixed readout from state to light, plus the limits of P2. These are about the lamp and not the model, so they
-   cannot be learned away.
+## 5. The ledger of assumptions
 
-## 5. Where this model is weakest
+1. The state size and the spread of timescales in `K` (section 3).
+2. The basis `phi` (start: the state itself plus a small set of smooth bumps; the family limits what can be imprinted).
+3. Noise is Gaussian.
+4. Each feed is given a fixed direction `B_f` in state space when it is registered. The model does not learn what a feed
+   means; the readout fixes how a pull looks as light. **[ASSUMPTION]** Feeds are normalised to zero mean and unit
+   variance by running statistics so that a constant feed does not bias the lamp forever.
+5. The readout from state to light, and the L0 limits. These are about the lamp, not the model.
+6. `eps`, `H` and the norm bound of `theta`: how fast it learns and forgets. Set once, then tuned by replay tests.
 
-- **Predicting is not expressing.** The model learns to predict its feeds. The light is a fixed readout of the state, so
-  a feed pulls the light, but which way "up" goes is a choice in the readout, not something the data decides. We may
-  also let a person's reactions (a poke, an override, a "like") steer the readout. That is a second, later loop.
-- **Hidden state.** Section 3 is an open technical choice.
-- **Meaning.** The model does not know what a feed means. If we want "a stock fell, so it should look uneasy", that is
-  an assumption we would add on purpose and list.
+## 6. Where this is weakest
 
-## 6. Build order
+- Whether a small fixed basis can represent a loop sharp enough to show a "sunrise"; this may need more state or a
+  richer basis, under P8.
+- Alignment with several feeds at once: their pushes add, and nothing yet decides which wins when they disagree.
+- The readout decides what a pull looks like. A person's reactions (a poke, an override) could later adjust it.
+- Stability: `f` with a learned part must stay bounded; the mean reversion in `K` must dominate it.
 
-1. The state-space core with exact stepping and limits (P2, P3), driven by synthetic data and replayed faster than real
-   time.
-2. Mode learning with its tests (P4 to P6).
-3. A readout to the lamp that reproduces today's calm behaviour from the model alone.
+## 7. Build order
+
+1. A pure, deterministic simulator of L1 to L3 with no lamp and no network, replayable faster than real time.
+2. The tests P2 to P6 above, on synthetic feeds. If P5 fails, the idea changes before anything else is built.
+3. L0 and the readout, reproducing today's calm behaviour from the model alone.
 4. The feed channel, then the first real feeds.
