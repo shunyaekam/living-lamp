@@ -1,6 +1,6 @@
-# The model behind the lamp (draft 5, for review)
+# The model behind the lamp (draft 6, for review)
 
-Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 4. Statements marked **[ASSUMPTION]** are not established.
+Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 5. Statements marked **[ASSUMPTION]** are not established.
 
 ## 1. The idea
 
@@ -63,19 +63,28 @@ L0  light = Limit( x ) + breathing(t)
   would grow for as long as a feed lasts and never converge. The version above converges to the average push.)
 - A periodic feed carries the state round a loop while the clocks lock to it. After it is gone the lamp keeps travelling
   the loop at the clocks' learned speed: a learned limit cycle with no outside time.
-- `Limit` and `breathing` are L0: smoothing, brightness ceiling, reversal cap and a fixed breathing wave. They are
-  applied to whatever the lower layers produce and are never learned.
+- `Limit` and `breathing` are L0: a three-stage smoother, a rate limit, the brightness ceiling and colour disc, a fixed
+  breathing wave, and a **reversal governor** (a parameter may turn round only after a minimum gap, so reversals are
+  bounded by construction; smoothing alone cannot bound them). They are applied to whatever the lower layers produce and
+  are never learned.
+- **Coherence gate.** Imprint for a clock learns only as much as the push is coherent with that clock across periods
+  (a slow average of the push against the clock, over the push's own size: 1 for a steady rhythm, near 0 for noise). So
+  only what repeats leaves a mark.
+- **Several feeds.** Fresh feeds are blended by priority and freshness; the imprint competes with a fixed weight, so a
+  feed that has gone quiet fades to the lamp's own replay (`forcing = C * push + (1 - C) * replay`, so the result stays
+  inside the hull of the pushes and the replay). An agent's feed has authority by carrying a very large priority.
 
 ## 5. Principles, each with a test
 
-**P1. Limits are enforced, never learned (L0).** *Test:* adversarial feeds (jumps, noise, NaN, huge values) never break
-the ceiling, the reversal cap or the glides, in any frame.
+**P1. Limits are enforced, never learned (L0).** *Test:* violent random input (values to a million, NaN and infinity)
+never breaks the colour disc or the ceiling, never produces a non-finite value, and never makes a parameter reverse
+more than three times in any second; a step change always glides.
 
 **P2. Imprint learns only from being driven.** With no feed, `theta` changes only by forgetting. *Test:* run alone for
 weeks; `theta` stays at its prior and the clocks keep their speeds.
 
-**P3. Noise leaves no mark.** A feed with no structure relative to the lamp averages out. *Test:* drive with white
-noise; `theta` stays near zero.
+**P3. Noise leaves little mark.** A feed with no structure relative to the lamp must not imprint. Plain least-squares
+fails this; the coherence gate (section 4) passes it. *Test:* a random feed leaves under 15% of what a real rhythm does.
 
 **P4. Rehearsal matters.** One episode leaves a faint trace; repetition builds a lasting one. *Test:* trace strength
 grows with the number of episodes and fades with half-life `H` once they stop.
@@ -102,26 +111,30 @@ the light's own state.
    limits what can be imprinted.
 3. Noise is Gaussian, and the stiffness `K` and spread `sigma` are set per mood.
 4. Each feed is given a fixed direction `B_f` in state space when it is registered, and feeds are normalised by running
-   statistics so a constant feed does not bias the lamp forever. The model does not learn what a feed means.
+   statistics so a constant feed does not bias the lamp forever. The normaliser's memory is itself a timescale: it must
+   be much longer than any rhythm the lamp should learn, or it filters that rhythm out. The model does not learn what
+   a feed means.
 5. The L0 limits and the breathing wave. They are about the lamp, not the model.
-6. `eps`, `H` and the norm bound of `theta`: how fast it learns and forgets. Set once, then tuned by replay tests.
+6. `eps`, `H`, the norm bound of `theta`, and the coherence gate's rate and floor: how fast it learns and forgets and
+   how coherent a push must be. Set once, then tuned by replay tests.
+7. The priorities and memories of the feeds, and the imprint's competing weight.
 
 ## 7. Where this is weakest
 
-- **Noise rejection.** Section 9: plain least-squares leaves a trace from a random feed. A coherence gate is needed.
 - **Entrainment** works in the simulation with a phase-locked loop on the part of the state near each clock's
   frequency, but only for rhythms the clock ladder reaches, and only on synthetic feeds.
 - A small basis may not make a loop sharp enough for a "sunrise"; that would need more state or a richer basis (P8).
-- With several feeds at once their pushes add, and nothing yet decides which wins when they disagree.
+- Several feeds are blended by fixed priorities (section 4). Whether priorities should instead be learned is untested.
 - Stability: the mean reversion in `K` must dominate the learned part of `f`.
 
 ## 8. Build order
 
-1. ~~A pure, deterministic simulator of L1 to L3 and the clocks~~ (done: `crates/lamp-model`).
-2. ~~Tests P2 to P6 on synthetic feeds~~ (done, section 9). Still to do: the with-and-without-clocks comparison of P8, and
-   a coherence gate for noise.
-3. L0 and the output to the lamp, reproducing today's calm behaviour from the model alone.
-4. The feed channel, then the first real feeds.
+1. ~~A pure, deterministic simulator of the model~~ (done: `crates/lamp-model`).
+2. ~~The tests of P1 to P9, the with-and-without-clocks comparison and the coherence gate~~ (done, section 9).
+3. Wire the model into the creature: a feed channel (a UDP command that sets a feed's value), the model's state shown
+   through the L0 limits as light, and a way to see and wipe what it has learned. This is the first step that touches
+   the real lamp, so each part is tested live, one question at a time.
+4. The first real feeds: time-free ones first (a ping, a mood from an agent), then weather and music.
 
 ## 9. What the first simulation showed
 
@@ -153,5 +166,25 @@ synthetic feeds, not on the real lamp.
 - The replayed amplitude is 1.06 to 1.2 times the driven one, not exactly 1: the imprint spreads across neighbouring
   clocks that lock to the same feed. Harmless for light, but not exact.
 
-**Not yet tested:** the P8 comparison with and without the clocks; several feeds at once; the output limits (L0); the
-real lamp.
+**Added after the first run:**
+- **P8, the clocks earn their place.** Over 12 seeds with noise, the clock model keeps the learned rhythm steady
+  (retained amplitude 0.83 to 1.07 of the driven one, median 0.99, twelve periods after the feed stops). A model with no
+  clocks, whose imprint is a function of the light's state alone, sometimes holds it but is only marginally stable
+  (0.13 to 5.33, median 1.48). The clocks are kept. (Both models were given a second state dimension that follows the
+  first; a one-dimensional state cannot oscillate at all.)
+- **The coherence gate works.** A random feed leaves 0.073 of a real rhythm's imprint with the gate against 0.50 without,
+  while the real rhythm's own imprint is unchanged (0.00313 against 0.00302), and persistence (P5) still holds with it.
+- **P1.** Under violent random input (values to a million, NaN, infinity) the colour and level never leave their limits,
+  stay finite, and no parameter reverses more than three times in any second. Before the reversal governor the same
+  input gave nine or ten reversals a second: smoothing alone cannot bound them.
+- **P9 and the feed layer.** Fresh feeds blend by priority (2:1 gives the weighted average), a quiet feed fades to the
+  lamp's own replay (weight 0.80 fresh, 0.0002 after ten memories), a feed with a huge priority takes the lamp, a
+  constant feed normalises to zero, and non-finite readings are ignored.
+- **The whole stack.** A sine feed enters the feed layer, drives the model, is imprinted, and after the feed stops the
+  light shown through the L0 limits keeps oscillating at the feed's period with amplitude about 1.06 of the driven one.
+- **Alone.** An hour with no feed, the lamp keeps moving on its own (level 0.19 with spread 0.04 about its mean).
+- **A lesson about the normaliser.** The first whole-stack test saw almost no push, because the feed normaliser started
+  at variance 1 and adapted too fast or too slowly for the rhythm. Its memory must be much longer than the rhythms it
+  should pass (ledger item 4).
+
+**Not yet tested:** the real lamp, and feeds that matter (weather, music), and whether the priorities should be learned.
