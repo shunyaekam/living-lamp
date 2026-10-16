@@ -1,6 +1,6 @@
-# The model behind the lamp (draft 6, for review)
+# The model behind the lamp (draft 7, for review)
 
-Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 5. Statements marked **[ASSUMPTION]** are not established.
+Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 6. Statements marked **[ASSUMPTION]** are not established.
 
 ## 1. The idea
 
@@ -17,6 +17,17 @@ L3  IMPRINT       what it was pulled through changes L1, so its "random"        
 Everything outside the lamp is a feed: weather, music, a screen, an agent, the sun. Nothing in the model knows what a
 day is, what the sun is or what a clock says. **The frame of reference is the lamp itself**: its light and its own
 clocks. An imprint says "when I looked like this, at this point of my own rhythm, the world pulled me this way".
+
+**A true organism: everything is a stream into it, and it is the only thing that drives the lamp.** Weather, music, an
+agent, the screen and a person's command are all feeds. There is no side door to the lamp: a person's command is a very
+stiff, very high-priority feed with a long memory, and the screen is a stiff feed that refreshes many times a second.
+Lampbus is the organism's motor layer (Bluetooth, protocol, reliability) and nothing else decides what the light does.
+
+```
+the world and the person  ─ feeds ─▶  organism (this model)  ─ light ─▶  lampbus  ─▶  lamp
+(weather, music, agent, screen,       L2 alignment, L1 spontaneous,      UDP stream
+ commands from Siri, CLI, app)        L3 imprint, then the L0 limits     input
+```
 
 ## 2. The state
 
@@ -70,9 +81,17 @@ L0  light = Limit( x ) + breathing(t)
 - **Coherence gate.** Imprint for a clock learns only as much as the push is coherent with that clock across periods
   (a slow average of the push against the clock, over the push's own size: 1 for a steady rhythm, near 0 for noise). So
   only what repeats leaves a mark.
-- **Several feeds.** Fresh feeds are blended by priority and freshness; the imprint competes with a fixed weight, so a
-  feed that has gone quiet fades to the lamp's own replay (`forcing = C * push + (1 - C) * replay`, so the result stays
-  inside the hull of the pushes and the replay). An agent's feed has authority by carrying a very large priority.
+- **Several feeds, of two kinds.** A *flow* feed pushes along a direction (weather, a mood, a ping). A *setpoint* feed
+  says where to be and pulls the state there with a stiffness `k` (a person's command, the screen); its pull joins the
+  light's own pull toward its mean, and the step stays exact. Fresh feeds are blended by priority and freshness; the
+  imprint competes with a fixed weight, so a feed that has gone quiet fades to the lamp's own replay
+  (`forcing = C * drive + (1 - C) * replay`, so the result stays inside the hull of the drives and the replay). Authority
+  is priority, not a bypass: a person's or an agent's feed carries a very large priority, and its memory sets how long it
+  holds (it holds until `priority * exp(-age / memory)` falls to the imprint's weight, then hands the lamp back
+  gradually).
+- **L0 loosens when the world drives hard.** The smoothing time constant and the minimum reversal gap move from their rest
+  values toward fast ones with *arousal*, which is the drive weight `C`: languid at rest, quick when strongly pulled. The
+  reversal bound is 1/gap at rest (three a second) and 1/gap_fast when driven (ten a second).
 
 ## 5. Principles, each with a test
 
@@ -102,7 +121,9 @@ rate. *Test:* long runs at 10 and 60 fps agree in mean, spread and autocorrelati
 data the model has not seen. In particular the clocks are compared against the same model without them, which has only
 the light's own state.
 
-**P9. Authority is a strict order.** A person, then an agent, then the lamp's own dynamics.
+**P9. Authority is priority, not a bypass.** A person's command, an agent and the screen are feeds with priorities and
+memories; nothing reaches the lamp except through the organism. *Test:* a command reaches its target quickly, holds,
+and hands the lamp back; a feed with a huge priority takes the lamp from the others.
 
 ## 6. The ledger of assumptions
 
@@ -117,7 +138,8 @@ the light's own state.
 5. The L0 limits and the breathing wave. They are about the lamp, not the model.
 6. `eps`, `H`, the norm bound of `theta`, and the coherence gate's rate and floor: how fast it learns and forgets and
    how coherent a push must be. Set once, then tuned by replay tests.
-7. The priorities and memories of the feeds, and the imprint's competing weight.
+7. The priorities, stiffnesses and memories of the feeds, and the imprint's competing weight.
+8. The fast values of the L0 limits (smoothing and reversal gap when strongly driven).
 
 ## 7. Where this is weakest
 
@@ -125,16 +147,25 @@ the light's own state.
   frequency, but only for rhythms the clock ladder reaches, and only on synthetic feeds.
 - A small basis may not make a loop sharp enough for a "sunrise"; that would need more state or a richer basis (P8).
 - Several feeds are blended by fixed priorities (section 4). Whether priorities should instead be learned is untested.
+- **Availability.** Because the organism is the only path to the lamp, if it stops, commands stop working until it is
+  restarted. Mitigations that keep the architecture pure: the service is supervised and restarts itself within seconds,
+  lampbus keeps the last light when the stream goes quiet (so the lamp is never left dark by a crash), and a human can
+  turn the organism off with one switch and use lampbus directly. That switch is for a person, not a reflex path.
+- **Mirroring lags a little.** Through the organism the screen is tracked to 90% in about 0.47 s, against roughly 0.1 to
+  0.15 s for the direct stream the screen app uses today.
+- **The reversal cap is looser when driven** (ten a second, against three at rest). Whether that flickers on real video is
+  untested on the real lamp.
 - Stability: the mean reversion in `K` must dominate the learned part of `f`.
 
 ## 8. Build order
 
 1. ~~A pure, deterministic simulator of the model~~ (done: `crates/lamp-model`).
-2. ~~The tests of P1 to P9, the with-and-without-clocks comparison and the coherence gate~~ (done, section 9).
-3. Wire the model into the creature: a feed channel (a UDP command that sets a feed's value), the model's state shown
-   through the L0 limits as light, and a way to see and wipe what it has learned. This is the first step that touches
-   the real lamp, so each part is tested live, one question at a time.
-4. The first real feeds: time-free ones first (a ping, a mood from an agent), then weather and music.
+2. ~~The tests of P1 to P9, the with-and-without-clocks comparison, the coherence gate, setpoint feeds and arousal-scaled
+   limits~~ (done, section 9).
+3. Make the organism the only path to the lamp (section 10): a feed channel, the model's light sent to lampbus, and
+   lampbus's doors forwarding commands to the organism. This changes the live path, so it is done in steps, each tested
+   live one question at a time, with the escape switch in place first.
+4. The first real feeds: a person's commands, an agent's state and pings, then weather and music; the screen last.
 
 ## 9. What the first simulation showed
 
@@ -187,4 +218,27 @@ synthetic feeds, not on the real lamp.
   at variance 1 and adapted too fast or too slowly for the rhythm. Its memory must be much longer than the rhythms it
   should pass (ledger item 4).
 
-**Not yet tested:** the real lamp, and feeds that matter (weather, music), and whether the priorities should be learned.
+**The purer architecture, in the simulator:**
+- **A person's command is a feed.** A stiff, high-priority setpoint with a 300 s memory reaches its target in 0.60 s,
+  holds it (100% of the time between 30 and 40 minutes later), and gives the lamp back to the organism over the next
+  hours.
+- **The screen is a feed.** Targets arriving at 15 per second reach 90% of a red-to-cyan switch in 0.47 s when the limits
+  loosen with arousal, and 2.17 s if the limits stayed at their rest values: the arousal scaling is what makes the screen
+  usable through the organism.
+- **Limits still hold when driven.** Under random screen frames no parameter reverses more than nine times in any second
+  (bound ten).
+
+**Not yet tested:** the real lamp, feeds that matter (weather, music), and whether the priorities should be learned.
+
+## 10. What the purer architecture requires of lampbus
+
+The organism changes nothing in lampbus's core, but its doors change what they do with a command:
+1. **Forward, don't execute.** A command arriving at any door (HTTP, MCP, Matter and so on, so Siri too) is sent to the
+   organism as a setpoint feed, and the organism's light comes back over the existing UDP stream input. Lampbus keeps
+   everything below that: Bluetooth, the protocol, belief and safety.
+2. **Discrete commands are the organism's lifecycle.** Off puts the organism to sleep and powers the lamp off; on wakes it.
+   Firmware effects and other discrete commands pass through as actions the organism may issue.
+3. **Failure.** If the stream goes quiet, lampbus keeps the last light (it already falls back to the last command after two
+   seconds, and a supervisor restarts the organism). A switch in lampbus's config puts it back in direct mode for a person.
+4. **Order of work.** The escape switch first, then forwarding behind a flag, then the feed channel in the organism, each
+   tested live.

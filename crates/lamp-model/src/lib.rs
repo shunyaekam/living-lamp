@@ -12,6 +12,8 @@ pub mod feeds;
 pub mod light;
 pub mod limit;
 
+use feeds::Drive;
+
 use std::f64::consts::TAU;
 
 /// The number of independent light parameters: colour as a point on a disc, and level.
@@ -258,35 +260,50 @@ impl Model {
     }
 
     /// Advance by `dt` seconds with the world's push at `weight` (0 to 1) and the imprint replayed for the rest.
-    ///
-    /// With weight 1 the world drives the lamp and the imprint learns it; with weight 0 the imprint is replayed alone.
-    /// The light always returns toward its mean, and the noise keeps it moving.
     pub fn step_weighted(&mut self, dt: f64, push: [f64; DIMS], weight: f64) {
-        let w = weight.clamp(0.0, 1.0);
+        self.step_drive(
+            dt,
+            &Drive {
+                push,
+                weight,
+                ..Drive::default()
+            },
+        );
+    }
+
+    /// Advance by `dt` seconds under what the feeds ask for.
+    ///
+    /// With weight 1 the world drives the lamp and the imprint learns it; with weight 0 the imprint is replayed alone. A
+    /// setpoint's stiffness joins the light's own pull toward its mean, and the step stays exact in time. The noise keeps
+    /// the light moving.
+    pub fn step_drive(&mut self, dt: f64, drive: &Drive) {
+        let w = drive.weight.clamp(0.0, 1.0);
         let before = self.x;
         let z = self.features();
         let replay = self.replay();
-        let mut drive = [0.0; DIMS];
+        let spring = w * drive.spring.max(0.0);
+        let mut forcing = [0.0; DIMS];
+        let mut taught = [0.0; DIMS];
         for i in 0..DIMS {
-            drive[i] = w * push[i] + (1.0 - w) * replay[i];
+            // what the world is asking, as a push at the present state (a setpoint pulls toward its target)
+            taught[i] = drive.push[i] + drive.spring.max(0.0) * (drive.target[i] - before[i]);
+            forcing[i] = w * (drive.push[i] + drive.spring.max(0.0) * drive.target[i])
+                + (1.0 - w) * replay[i];
         }
-        drive[1] += self.cfg.link * (before[0] - self.cfg.mean[0]);
+        forcing[1] += self.cfg.link * (before[0] - self.cfg.mean[0]);
         for i in 0..DIMS {
-            let k = self.cfg.rate[i].max(1e-12);
+            let k = (self.cfg.rate[i] + spring).max(1e-12);
             let e = (-k * dt).exp();
-            let gain = (1.0 - e) / k;
+            let rest = (self.cfg.rate[i] * self.cfg.mean[i] + forcing[i]) / k;
             let sd = self.cfg.noise[i] * ((1.0 - e * e) / (2.0 * k)).sqrt();
-            self.x[i] = self.cfg.mean[i]
-                + e * (before[i] - self.cfg.mean[i])
-                + gain * drive[i]
-                + sd * self.rng.normal();
+            self.x[i] = rest + e * (before[i] - rest) + sd * self.rng.normal();
         }
         if self.cfg.basis == Basis::Clocks {
             self.demodulate(dt);
         }
         if w > 0.0 {
-            let gates = self.coherence(dt, push);
-            self.learn(dt, w, push, replay, &z, &gates);
+            let gates = self.coherence(dt, taught);
+            self.learn(dt, w, taught, replay, &z, &gates);
             if self.cfg.entrain && self.cfg.basis == Basis::Clocks {
                 self.entrain(dt, w);
             }

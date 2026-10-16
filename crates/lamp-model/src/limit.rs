@@ -11,14 +11,18 @@ use std::f64::consts::TAU;
 /// Limits, set once.
 #[derive(Clone, Copy, Debug)]
 pub struct LimitConfig {
-    /// Time constant of each of the three smoothing stages, in seconds.
+    /// Time constant of each of the three smoothing stages at rest, in seconds.
     pub tau: f64,
+    /// The same when the world is driving the lamp hard (arousal 1): quicker, like an alert animal.
+    pub tau_fast: f64,
     /// The highest level the lamp may show, `0..=1`.
     pub ceiling: f64,
     /// The fastest the light may move, in state units per second.
     pub max_rate: f64,
-    /// The least time between two changes of direction of one parameter, in seconds.
+    /// The least time between two changes of direction of one parameter at rest, in seconds.
     pub min_reversal_gap: f64,
+    /// The same when the world is driving the lamp hard (arousal 1).
+    pub gap_fast: f64,
 }
 
 /// The smoother, rate limit and clamps.
@@ -60,12 +64,17 @@ impl Limit {
 
     /// The light for what is wanted, after `dt` seconds. Non-finite and huge inputs are tamed, never passed on.
     pub fn apply(&mut self, dt: f64, desired: [f64; DIMS]) -> [f64; DIMS] {
-        let shaped = self.shape(dt, desired);
-        self.commit(shaped)
+        self.apply_aroused(dt, desired, 0.0)
+    }
+
+    /// Like [`Limit::apply`], with the limits loosened by `arousal` (0 at rest, 1 when the world is driving hard).
+    pub fn apply_aroused(&mut self, dt: f64, desired: [f64; DIMS], arousal: f64) -> [f64; DIMS] {
+        let shaped = self.shape(dt, desired, arousal);
+        self.commit(shaped, arousal)
     }
 
     /// Smoothing, rate limit and clamps: the light the lamp would move to, before the reversal governor.
-    fn shape(&mut self, dt: f64, desired: [f64; DIMS]) -> [f64; DIMS] {
+    fn shape(&mut self, dt: f64, desired: [f64; DIMS], arousal: f64) -> [f64; DIMS] {
         let mut want = desired;
         for (w, g) in want.iter_mut().zip(self.good) {
             if !w.is_finite() {
@@ -79,7 +88,9 @@ impl Limit {
             self.out = want;
             self.started = true;
         }
-        let alpha = 1.0 - (-dt / self.cfg.tau.max(1e-9)).exp();
+        let a = arousal.clamp(0.0, 1.0);
+        let tau = self.cfg.tau * (1.0 - a) + self.cfg.tau_fast * a;
+        let alpha = 1.0 - (-dt / tau.max(1e-9)).exp();
         let mut input = want;
         for stage in &mut self.stages {
             for i in 0..DIMS {
@@ -97,8 +108,10 @@ impl Limit {
     }
 
     /// The reversal governor: a parameter turns round only after the minimum gap since it last did; until then it holds.
-    fn commit(&mut self, next: [f64; DIMS]) -> [f64; DIMS] {
+    fn commit(&mut self, next: [f64; DIMS], arousal: f64) -> [f64; DIMS] {
         let next = self.clamp(next);
+        let a = arousal.clamp(0.0, 1.0);
+        let gap = self.cfg.min_reversal_gap * (1.0 - a) + self.cfg.gap_fast * a;
         for i in 0..DIMS {
             let delta = next[i] - self.out[i];
             if delta.abs() <= 1e-12 {
@@ -106,7 +119,7 @@ impl Limit {
             }
             let sign = delta.signum();
             if self.direction[i] != 0.0 && sign != self.direction[i] {
-                if self.t - self.last_flip[i] < self.cfg.min_reversal_gap {
+                if self.t - self.last_flip[i] < gap {
                     continue; // too soon to turn round: hold
                 }
                 self.last_flip[i] = self.t;
@@ -145,12 +158,17 @@ impl Autonomic {
 
     /// The light to show for what the lamp wants, after `dt` seconds.
     pub fn apply(&mut self, dt: f64, desired: [f64; DIMS]) -> [f64; DIMS] {
-        let mut x = self.limit.shape(dt, desired);
+        self.apply_aroused(dt, desired, 0.0)
+    }
+
+    /// Like [`Autonomic::apply`], with the limits loosened by `arousal` (0 at rest, 1 when the world is driving hard).
+    pub fn apply_aroused(&mut self, dt: f64, desired: [f64; DIMS], arousal: f64) -> [f64; DIMS] {
+        let mut x = self.limit.shape(dt, desired, arousal);
         self.t += dt;
         let wander = 1.0 + 0.15 * (TAU * self.t / (self.period * 7.3)).sin();
         self.phase = (self.phase + TAU * dt / (self.period * wander)).rem_euclid(TAU);
         x[2] *= 1.0 + self.depth * self.phase.sin();
         // the governor comes last, so the bound on reversals covers everything that is shown, breathing included
-        self.limit.commit(x)
+        self.limit.commit(x, arousal)
     }
 }

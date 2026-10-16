@@ -14,9 +14,11 @@ use std::f64::consts::TAU;
 
 const LIMITS: LimitConfig = LimitConfig {
     tau: 0.4,
+    tau_fast: 0.03,
     ceiling: 0.4,
     max_rate: 2.0,
     min_reversal_gap: 0.5,
+    gap_fast: 0.1,
 };
 
 /// The most direction reversals of `series` inside any window of one second.
@@ -127,6 +129,7 @@ fn readout_maps_state_to_colour_and_level() {
 fn spec(dir: [f64; DIMS], priority: f64) -> FeedSpec {
     FeedSpec {
         dir,
+        stiffness: 0.0,
         priority,
         memory: 100.0,
     }
@@ -222,9 +225,11 @@ fn a_feed_through_the_whole_stack_is_imprinted_and_replayed_as_light() {
     let mut l = Autonomic::new(
         LimitConfig {
             tau: 20.0,
+            tau_fast: 1.0,
             ceiling: 1.0,
             max_rate: 1.0,
             min_reversal_gap: 0.5,
+            gap_fast: 0.1,
         },
         0.0,
         6.0,
