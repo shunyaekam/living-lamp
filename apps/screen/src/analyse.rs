@@ -5,7 +5,7 @@
 //! separate intensity, because the lamp has a separate brightness dimension and a dark blue scene should be a dim
 //! saturated blue, not a muddy grey.
 
-use lampbus_render::color::{linear_to_srgb, rgb_to_hsv, srgb_to_linear};
+use crate::color::{linear_to_srgb, rgb_to_hsv, srgb_to_linear};
 
 /// What to send to the lamp.
 #[derive(Debug, Clone, Copy, PartialEq)]

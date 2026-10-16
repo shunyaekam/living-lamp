@@ -9,7 +9,6 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-lampbus-render = { path = "../../crates/lampbus-render" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"

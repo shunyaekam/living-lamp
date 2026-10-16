@@ -4,6 +4,7 @@
 //! macOS only; needs Screen Recording permission for the terminal you run it from.
 
 mod analyse;
+mod color;
 
 use analyse::{analyse, Image, Mode, Params};
 use std::net::UdpSocket;

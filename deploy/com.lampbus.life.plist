@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- launchd agent for the ambient creature. Installed by `deploy/install.sh --life`. -->
+<!-- launchd agent for the ambient creature. Installed by `deploy/install.sh`. -->
 <plist version="1.0">
 <dict>
   <key>Label</key><string>com.lampbus.life</string>
