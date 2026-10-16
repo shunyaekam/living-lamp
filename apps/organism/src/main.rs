@@ -142,9 +142,13 @@ fn wire(l: lamp_model::light::Light) -> [u8; 5] {
 fn run(o: &Opts) -> Result<(), String> {
     let control = bind(&o.listen)?;
     let screen = bind(&o.screen)?;
-    let out = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
+    // send from the loopback address when lampbus is local, so nothing is bound to the network by accident
+    let local = o.to.starts_with("127.") || o.to.starts_with("localhost");
+    let out = UdpSocket::bind(if local { "127.0.0.1:0" } else { "0.0.0.0:0" })
+        .map_err(|e| e.to_string())?;
     let motor = motor::spawn(o.lampbus.clone(), token()?);
     let mut organism = Organism::new(o.seed);
+    organism.start_asleep();
     match std::fs::read_to_string(&o.state) {
         Ok(text) => match organism.load(&text) {
             Ok(()) => eprintln!(

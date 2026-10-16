@@ -12,6 +12,8 @@ use std::time::Duration;
 pub const UNKNOWN: u8 = 0;
 pub const OFF: u8 = 1;
 pub const ON: u8 = 2;
+/// lampbus has not been told anything about the lamp since it started (`"known":false`), so its idea of the power is empty.
+pub const UNTOUCHED: u8 = 3;
 
 /// The motor: send control objects to lampbus.
 #[derive(Clone)]
@@ -64,6 +66,10 @@ fn request(
 
 /// The first lamp's power in a `/api/state` reply (`"on":true` or `"on":false`, as lampbus writes it).
 pub fn power_in(state: &str) -> u8 {
+    let first_on = state.find("\"on\":").unwrap_or(usize::MAX);
+    if state.find("\"known\":false").is_some_and(|k| k < first_on) {
+        return UNTOUCHED;
+    }
     match (state.find("\"on\":true"), state.find("\"on\":false")) {
         (Some(a), Some(b)) if a < b => ON,
         (Some(_), None) => ON,
@@ -138,6 +144,12 @@ mod tests {
         assert_eq!(power_in("{\"lamps\":[{\"on\":true,\"x\":1}]}"), ON);
         assert_eq!(power_in("{\"lamps\":[{\"on\":false}]}"), OFF);
         assert_eq!(power_in("{\"lamps\":[]}"), UNKNOWN);
+        assert_eq!(
+            power_in("{\"lamps\":[{\"known\":false,\"on\":false}]}"),
+            UNTOUCHED,
+            "a restarted lampbus knows nothing yet"
+        );
+        assert_eq!(power_in("{\"lamps\":[{\"known\":true,\"on\":false}]}"), OFF);
         assert_eq!(
             power_in("{\"lamps\":[{\"on\":true},{\"on\":false}]}"),
             ON,

@@ -74,11 +74,14 @@ pub struct Organism {
     person: usize,
     screen: usize,
     agent: usize,
+    home: usize,
     person_at: Option<f64>,
     person_target: [f64; DIMS],
     awake: bool,
     delegated: bool,
     last_power_cmd: Option<f64>,
+    /// What the lamp last reported of its power (see `motor`).
+    lamp_power: u8,
     outbox: Vec<String>,
 }
 
@@ -105,6 +108,13 @@ impl Organism {
             priority: 1.0e4,
             memory: 60.0,
         });
+        // going home: a gentle pull to the organism's own resting light, used when a person lets go
+        let home = feeds.add(FeedSpec {
+            dir: none,
+            stiffness: 0.05,
+            priority: 1.0e6,
+            memory: 10.0,
+        });
         Organism {
             model: Model::new(config(), seed),
             feeds,
@@ -112,11 +122,13 @@ impl Organism {
             person,
             screen,
             agent,
+            home,
             person_at: None,
             person_target: [0.0; DIMS],
             awake: true,
             delegated: false,
             last_power_cmd: None,
+            lamp_power: motor::UNKNOWN,
             outbox: Vec::new(),
         }
     }
@@ -136,13 +148,20 @@ impl Organism {
         std::mem::take(&mut self.outbox)
     }
 
+    /// Start asleep: it wakes when the lamp reports that it is on, so it never lights a dark room by itself.
+    pub fn start_asleep(&mut self) {
+        self.awake = false;
+    }
+
     /// Whether the organism is awake and driving the lamp.
     pub fn driving(&self) -> bool {
         self.awake && !self.delegated
     }
 
     fn wake(&mut self, now: f64) {
-        if !self.awake {
+        // a power-on also ends lampbus's pause on streams, which a relayed effect starts: without it the lamp would
+        // ignore the organism for an hour after an effect
+        if !self.awake || self.delegated || self.lamp_power != motor::ON {
             self.outbox.push("{\"power\":true}".into());
             self.last_power_cmd = Some(now);
         }
@@ -193,6 +212,12 @@ impl Organism {
                     self.wake(now);
                 }
             }
+            Msg::Release => {
+                self.feeds.clear(self.person);
+                self.feeds.clear(self.agent);
+                self.person_at = None;
+                self.feeds.set_target(self.home, config().mean, now);
+            }
             Msg::Act(json) => {
                 // something that is not a plain light: relay it to the motor and stop streaming so it shows
                 self.awake = true;
@@ -233,6 +258,16 @@ impl Organism {
 
     /// Follow what the lamp itself reports (a phone app, a hardware timer): ignored just after our own power command.
     pub fn resync(&mut self, lamp: u8, now: f64) {
+        self.lamp_power = lamp;
+        if lamp == motor::UNTOUCHED
+            && self.driving()
+            && self.last_power_cmd.map_or(true, |t| now - t >= 8.0)
+        {
+            // lampbus has just started and knows nothing of the lamp: say that it is on, or it will ignore the stream
+            self.outbox.push("{\"power\":true}".into());
+            self.last_power_cmd = Some(now);
+            return;
+        }
         if self.last_power_cmd.is_some_and(|t| now - t < 8.0) {
             return;
         }
@@ -358,6 +393,29 @@ mod tests {
     }
 
     #[test]
+    fn releasing_lets_the_lamp_ease_back_to_its_own_ember() {
+        let mut o = Organism::new(9);
+        o.handle(
+            Msg::Look {
+                rgb: [0.0, 0.0, 255.0],
+                percent: Some(60.0),
+            },
+            0.0,
+        )
+        .unwrap();
+        let (l, t) = run(&mut o, 0.0, 3.0);
+        assert!(l.unwrap().rgb[2] >= 253, "held blue");
+        o.handle(Msg::Release, t).unwrap();
+        let (l, _) = run(&mut o, t, 240.0);
+        let l = l.unwrap();
+        assert!(
+            l.rgb[0] > l.rgb[2],
+            "back to its warm self within four minutes: {:?}",
+            l.rgb
+        );
+    }
+
+    #[test]
     fn an_effect_is_relayed_and_the_organism_steps_aside() {
         let mut o = Organism::new(3);
         o.handle(Msg::Act("{\"effect\":\"rainbow\"}".into()), 0.0)
@@ -373,6 +431,11 @@ mod tests {
         )
         .unwrap();
         assert!(o.driving(), "a new colour takes the lamp back");
+        assert_eq!(
+            o.take_motor().last(),
+            Some(&"{\"power\":true}".to_string()),
+            "and clears lampbus's pause on streams, which the effect started"
+        );
     }
 
     #[test]
@@ -393,6 +456,38 @@ mod tests {
         );
         o.resync(motor::ON, 220.0);
         assert!(o.driving(), "later, the lamp's own report wins");
+    }
+
+    #[test]
+    fn an_on_command_turns_on_a_lamp_that_lampbus_thinks_is_off_even_if_we_think_we_are_awake() {
+        let mut o = Organism::new(10);
+        // just after a lampbus restart: we believe we are awake, the lamp reports off, and the poll has not yet put us to sleep
+        o.lamp_power = motor::OFF;
+        o.handle(Msg::Power(Power::On), 1.0).unwrap();
+        assert_eq!(o.take_motor(), vec!["{\"power\":true}".to_string()]);
+        // when the lamp is already on, an on command does not touch it again
+        o.resync(motor::ON, 50.0);
+        o.handle(Msg::Power(Power::On), 51.0).unwrap();
+        assert!(o.take_motor().is_empty());
+    }
+
+    #[test]
+    fn after_a_lampbus_restart_an_awake_organism_says_the_lamp_is_on_and_a_sleeping_one_stays_quiet(
+    ) {
+        let mut o = Organism::new(11);
+        o.resync(motor::UNTOUCHED, 100.0);
+        assert_eq!(o.take_motor(), vec!["{\"power\":true}".to_string()]);
+        o.resync(motor::UNTOUCHED, 102.0);
+        assert!(o.take_motor().is_empty(), "once, not every poll");
+        let mut sleeping = Organism::new(12);
+        sleeping.start_asleep();
+        sleeping.resync(motor::UNTOUCHED, 100.0);
+        assert!(
+            sleeping.take_motor().is_empty() && !sleeping.driving(),
+            "it does not light a dark room by itself"
+        );
+        sleeping.resync(motor::ON, 101.0);
+        assert!(sleeping.driving(), "but it wakes when it sees the lamp on");
     }
 
     #[test]
