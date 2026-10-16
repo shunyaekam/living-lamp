@@ -17,6 +17,7 @@ mod run {
         tau: 0.4,
         tau_fast: 0.03,
         ceiling: 0.4,
+        ceiling_fast: 0.4,
         max_rate: 4.0,
         min_reversal_gap: 0.5,
         gap_fast: 0.1,

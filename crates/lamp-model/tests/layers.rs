@@ -16,6 +16,7 @@ const LIMITS: LimitConfig = LimitConfig {
     tau: 0.4,
     tau_fast: 0.03,
     ceiling: 0.4,
+    ceiling_fast: 0.4,
     max_rate: 2.0,
     min_reversal_gap: 0.5,
     gap_fast: 0.1,
@@ -227,6 +228,7 @@ fn a_feed_through_the_whole_stack_is_imprinted_and_replayed_as_light() {
             tau: 20.0,
             tau_fast: 1.0,
             ceiling: 1.0,
+            ceiling_fast: 1.0,
             max_rate: 1.0,
             min_reversal_gap: 0.5,
             gap_fast: 0.1,
@@ -274,4 +276,71 @@ fn an_unfed_lamp_is_alive_and_lawful() {
     let sd = (level.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / level.len() as f64).sqrt();
     println!("an hour alone: mean level {mean:.3}, spread {sd:.3}");
     assert!(sd > 0.005, "it keeps moving on its own");
+}
+
+#[test]
+fn what_the_lamp_learned_survives_a_restart_and_bad_files_change_nothing() {
+    let period = 1500.0;
+    let rate = 1.0 / 600.0;
+    let mut cfg = Config::new(clocks());
+    cfg.gate = true;
+    let mut a = Model::new(cfg.clone(), 1);
+    let n = period as usize;
+    for k in 0..(30 * n) {
+        a.step(DT, Some(common::push_at(k as f64, period, rate)));
+    }
+    let text = a.save();
+    let mut b = Model::new(cfg.clone(), 9);
+    b.load(&text).unwrap();
+    assert!((a.imprint_norm() - b.imprint_norm()).abs() < 1e-9 * a.imprint_norm().max(1.0));
+    assert_eq!(a.omegas().len(), b.omegas().len());
+    assert!(a
+        .omegas()
+        .iter()
+        .zip(b.omegas())
+        .all(|(x, y)| (x - y).abs() < 1e-12));
+    // damaged or mismatched text is refused and leaves the lamp as it was
+    let before = b.save();
+    for bad in [
+        "",
+        "lamp-model 2\n",
+        "lamp-model 1\nclocks 3\nomega 1 2 3\n",
+        &text.replace("theta 1", "theta 9"),
+        &text.replace("e-", "nan e-"),
+    ] {
+        assert!(b.load(bad).is_err(), "{bad:?}");
+        assert_eq!(b.save(), before);
+    }
+    let mut c = Config::new(clocks());
+    c.periods.truncate(5);
+    assert!(
+        Model::new(c, 1).load(&text).is_err(),
+        "a different number of clocks"
+    );
+}
+
+#[test]
+fn breathing_belongs_to_the_lamp_at_rest_and_fades_as_the_world_takes_over() {
+    let cfg = LimitConfig {
+        tau: 0.4,
+        tau_fast: 0.03,
+        ceiling: 1.0,
+        ceiling_fast: 1.0,
+        max_rate: 4.0,
+        min_reversal_gap: 0.5,
+        gap_fast: 0.1,
+    };
+    let spread = |arousal: f64| {
+        let mut l = Autonomic::new(cfg, 0.12, 6.0);
+        let levels: Vec<f64> = (0..1200)
+            .map(|_| l.apply_aroused(0.05, [0.0, 0.0, 0.5], arousal)[2])
+            .collect();
+        let tail = &levels[600..];
+        tail.iter().copied().fold(f64::MIN, f64::max)
+            - tail.iter().copied().fold(f64::MAX, f64::min)
+    };
+    let (rest, driven) = (spread(0.0), spread(1.0));
+    println!("level swing over a minute at rest {rest:.3}, fully driven {driven:.6}");
+    assert!(rest > 0.05, "at rest the lamp breathes");
+    assert!(driven < 0.002, "a commanded level is shown steadily");
 }

@@ -15,8 +15,10 @@ pub struct LimitConfig {
     pub tau: f64,
     /// The same when the world is driving the lamp hard (arousal 1): quicker, like an alert animal.
     pub tau_fast: f64,
-    /// The highest level the lamp may show, `0..=1`.
+    /// The highest level the lamp may show at rest, `0..=1`: the organism's own light stays gentle.
     pub ceiling: f64,
+    /// The highest level when the world is driving hard (arousal 1): a person who asks for full brightness gets it.
+    pub ceiling_fast: f64,
     /// The fastest the light may move, in state units per second.
     pub max_rate: f64,
     /// The least time between two changes of direction of one parameter at rest, in seconds.
@@ -34,6 +36,7 @@ pub struct Limit {
     good: [f64; DIMS],
     started: bool,
     t: f64,
+    ceiling_now: f64,
     direction: [f64; DIMS],
     last_flip: [f64; DIMS],
 }
@@ -48,6 +51,7 @@ impl Limit {
             good: [0.0; DIMS],
             started: false,
             t: 0.0,
+            ceiling_now: cfg.ceiling,
             direction: [0.0; DIMS],
             last_flip: [f64::NEG_INFINITY; DIMS],
         }
@@ -59,7 +63,7 @@ impl Limit {
         if r > 1.0 {
             (a, b) = (a / r, b / r);
         }
-        [a, b, x[2].clamp(0.0, self.cfg.ceiling)]
+        [a, b, x[2].clamp(0.0, self.ceiling_now)]
     }
 
     /// The light for what is wanted, after `dt` seconds. Non-finite and huge inputs are tamed, never passed on.
@@ -89,6 +93,7 @@ impl Limit {
             self.started = true;
         }
         let a = arousal.clamp(0.0, 1.0);
+        self.ceiling_now = self.cfg.ceiling * (1.0 - a) + self.cfg.ceiling_fast * a;
         let tau = self.cfg.tau * (1.0 - a) + self.cfg.tau_fast * a;
         let alpha = 1.0 - (-dt / tau.max(1e-9)).exp();
         let mut input = want;
@@ -167,7 +172,8 @@ impl Autonomic {
         self.t += dt;
         let wander = 1.0 + 0.15 * (TAU * self.t / (self.period * 7.3)).sin();
         self.phase = (self.phase + TAU * dt / (self.period * wander)).rem_euclid(TAU);
-        x[2] *= 1.0 + self.depth * self.phase.sin();
+        // breathing is the lamp at rest: it fades out as the world takes over, so a commanded level is shown faithfully
+        x[2] *= 1.0 + self.depth * (1.0 - arousal.clamp(0.0, 1.0)) * self.phase.sin();
         // the governor comes last, so the bound on reversals covers everything that is shown, breathing included
         self.limit.commit(x, arousal)
     }

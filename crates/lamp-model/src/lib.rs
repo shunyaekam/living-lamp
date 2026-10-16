@@ -203,6 +203,81 @@ impl Model {
         }
     }
 
+    /// What the lamp has learned, as text: the clocks' speeds and the imprint. The light's state and the clocks' phases are
+    /// not saved; a restarted lamp starts from its mean.
+    pub fn save(&self) -> String {
+        let mut out = format!("lamp-model 1\nclocks {}\nomega", self.omega.len());
+        for w in &self.omega {
+            out.push_str(&format!(" {w:e}"));
+        }
+        out.push('\n');
+        for (i, t) in self.theta.iter().enumerate() {
+            out.push_str(&format!("theta {i}"));
+            for v in t {
+                out.push_str(&format!(" {v:e}"));
+            }
+            out.push('\n');
+        }
+        out
+    }
+
+    /// Restore what [`Model::save`] wrote. Refuses text from a lamp with a different number of clocks or features, or with
+    /// values that are not finite, and changes nothing in that case.
+    pub fn load(&mut self, text: &str) -> Result<(), String> {
+        let numbers = |line: &str, head: &str| -> Result<Vec<f64>, String> {
+            let rest = line
+                .strip_prefix(head)
+                .ok_or_else(|| format!("expected {head:?}"))?;
+            rest.split_whitespace()
+                .map(|v| {
+                    v.parse::<f64>()
+                        .ok()
+                        .filter(|x| x.is_finite())
+                        .ok_or_else(|| format!("bad number {v:?}"))
+                })
+                .collect()
+        };
+        let mut lines = text.lines();
+        if lines.next() != Some("lamp-model 1") {
+            return Err("not a saved lamp-model".into());
+        }
+        let clocks = lines
+            .next()
+            .and_then(|l| l.strip_prefix("clocks "))
+            .and_then(|n| n.trim().parse::<usize>().ok());
+        if clocks != Some(self.omega.len()) {
+            return Err("saved for a different number of clocks".into());
+        }
+        let omega = numbers(lines.next().unwrap_or_default(), "omega")?;
+        if omega.len() != self.omega.len() {
+            return Err("wrong number of clock speeds".into());
+        }
+        let mut theta = Vec::new();
+        for i in 0..DIMS {
+            let row = numbers(lines.next().unwrap_or_default(), &format!("theta {i}"))?;
+            if row.len() != self.theta[i].len() {
+                return Err("wrong number of imprint weights".into());
+            }
+            theta.push(row);
+        }
+        for (k, w) in omega.iter().enumerate() {
+            self.omega[k] = w.clamp(self.omega0[k] / self.ratio, self.omega0[k] * self.ratio);
+        }
+        for (i, row) in theta.into_iter().enumerate() {
+            self.theta[i] = row;
+        }
+        let norm = self.imprint_norm();
+        if norm > self.cfg.bound {
+            let scale = self.cfg.bound / norm;
+            for t in &mut self.theta {
+                for v in t.iter_mut() {
+                    *v *= scale;
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// The light parameters now.
     pub fn state(&self) -> [f64; DIMS] {
         self.x

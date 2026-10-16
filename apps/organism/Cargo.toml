@@ -1,0 +1,19 @@
+[package]
+name = "living-lamp"
+version = "0.0.1"
+description = "The living lamp: an organism that every input (commands, the screen, an agent) feeds, and that alone drives the lamp through lampbus"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "living-lamp"
+path = "src/main.rs"
+
+[dependencies]
+lamp-model = { path = "../../crates/lamp-model" }
+
+[lints]
+workspace = true

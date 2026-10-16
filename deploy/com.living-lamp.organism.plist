@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- launchd agent for the organism (living-lamp). Installed by `deploy/install.sh --organism`. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.living-lamp.organism</string>
+  <key>ProgramArguments</key>
+  <array><string>__HOME__/.local/bin/living-lamp</string></array>
+  <key>EnvironmentVariables</key>
+  <dict><key>PATH</key><string>__HOME__/.local/bin:/usr/local/bin:/usr/bin:/bin</string></dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><true/>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/living-lamp.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/living-lamp.log</string>
+</dict>
+</plist>

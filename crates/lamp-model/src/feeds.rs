@@ -113,6 +113,14 @@ impl Feeds {
         f.at = now;
     }
 
+    /// Forget feed `id`'s last value, so it stops pulling at once (an agent that has gone idle, a person who has turned
+    /// the lamp off).
+    pub fn clear(&mut self, id: usize) {
+        if let Some(f) = self.feeds.get_mut(id) {
+            f.seen = false;
+        }
+    }
+
     /// What the feeds ask for at time `now`.
     pub fn drive(&self, now: f64) -> Drive {
         let mut push = [0.0; DIMS];

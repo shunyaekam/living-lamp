@@ -1,0 +1,13 @@
+# systemd user unit: the organism. Installed by `deploy/install.sh --organism`; it needs the lampbus service.
+[Unit]
+Description=living-lamp organism
+After=lampbus.service
+Wants=lampbus.service
+
+[Service]
+ExecStart=%h/.local/bin/living-lamp
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target
