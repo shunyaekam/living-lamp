@@ -177,6 +177,9 @@ fn run(o: &Opts) -> Result<(), String> {
                         String::from_utf8_lossy(buf.get(..n).unwrap_or_default()).to_string();
                     let mut reply = "ok".to_string();
                     for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                        if line.trim() != "status" {
+                            eprintln!("living-lamp: message {:?} from {from}", line.trim());
+                        }
                         match parse(line).and_then(|m| organism.handle(m, now)) {
                             Ok(r) if reply == "ok" => reply = r,
                             Ok(_) => {}
@@ -200,6 +203,7 @@ fn run(o: &Opts) -> Result<(), String> {
         organism.resync(motor.lamp.load(std::sync::atomic::Ordering::Relaxed), now);
         let frame = organism.tick(dt, now);
         for c in organism.take_motor() {
+            eprintln!("living-lamp: motor {c}");
             motor.control(&c);
         }
         if let Some(l) = frame {

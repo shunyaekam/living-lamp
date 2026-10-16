@@ -1,6 +1,6 @@
-# The model behind the lamp (draft 7, for review)
+# The model behind the lamp (draft 8, for review)
 
-Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 6. Statements marked **[ASSUMPTION]** are not established.
+Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 7. Statements marked **[ASSUMPTION]** are not established.
 
 ## 1. The idea
 
@@ -162,10 +162,11 @@ and hands the lamp back; a feed with a huge priority takes the lamp from the oth
 1. ~~A pure, deterministic simulator of the model~~ (done: `crates/lamp-model`).
 2. ~~The tests of P1 to P9, the with-and-without-clocks comparison, the coherence gate, setpoint feeds and arousal-scaled
    limits~~ (done, section 9).
-3. Make the organism the only path to the lamp (section 10): a feed channel, the model's light sent to lampbus, and
-   lampbus's doors forwarding commands to the organism. This changes the live path, so it is done in steps, each tested
-   live one question at a time, with the escape switch in place first.
-4. The first real feeds: a person's commands, an agent's state and pings, then weather and music; the screen last.
+3. ~~Make the organism the only path to the lamp~~ (done, section 11): `apps/organism`, lampbus's `controller` option and
+   `lampbus direct`, tested live.
+4. The first feeds that matter: weather and music (the screen, an agent and a person's commands are already feeds). The
+   imprint has so far been learned only from synthetic feeds; it will be learned from a person's commands and the screen
+   as they happen.
 
 ## 9. What the first simulation showed
 
@@ -242,3 +243,31 @@ The organism changes nothing in lampbus's core, but its doors change what they d
    seconds, and a supervisor restarts the organism). A switch in lampbus's config puts it back in direct mode for a person.
 4. **Order of work.** The escape switch first, then forwarding behind a flag, then the feed channel in the organism, each
    tested live.
+
+## 11. What running it live showed
+
+Run on the real lamp (an iStrip/SSL strip), through lampbus's `controller` option. Seven problems appeared that no simulation
+could have shown; each is now fixed and has a test.
+
+- **A command was shown with a breathing wobble.** A person asking for 80% got 70% to 90%. Breathing is the lamp at rest, so
+  it now fades out as arousal rises, and a commanded level is shown steadily.
+- **"Let go" took ten minutes.** The light's own pull back to its mean is slow. Release is now a gentle two-minute pull to
+  the organism's resting light, after which it wanders again.
+- **After an effect the next colour was ignored for an hour.** lampbus pauses live streams after a person's command, and a
+  relayed effect counts as one. A power-on ends the pause, so taking the lamp back sends one. Handing the lamp back with
+  `lampbus direct off` also ends it (a new core command).
+- **After a lampbus restart the organism went to sleep.** Streamed frames counted as touching the lamp, which made it
+  "known but off". Streams no longer do, so an untouched lamp stays unknown, and an awake organism re-asserts power-on by
+  itself (the lamp was back within three seconds). It starts asleep so it never lights a dark room at login.
+- **Home apps showed a stale colour.** The daemon's state ignored streamed light. It now shows it, published about once a
+  second or at once for a big change, so Siri and Matter follow a lamp that something else drives.
+- **A power-on sent while the organism believed it was awake was dropped.** It now follows the lamp's own reported power.
+- **The organism's log was silent**, so it was hard to see why it slept. It now logs each message and motor call.
+
+What the live runs confirmed: commands through the organism (`lampbus color blue 30`, off and on) take effect within about a
+second; the relayed effect works; the escape switch bypasses the organism at once and hands it back; and the lamp recovers
+from a lampbus restart without a command.
+
+**Not yet judged by a person on the real lamp:** how the organism's ember looks over hours (it is much simpler than the
+earlier creature: no flicker or stirring yet), and how mirroring the screen through the organism feels (about half a second
+slower than the direct stream).
