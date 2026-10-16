@@ -1,6 +1,6 @@
-# The model behind the lamp (draft 4, for review)
+# The model behind the lamp (draft 5, for review)
 
-Status: **design, nothing built**. It replaces drafts 1 to 3. Statements marked **[ASSUMPTION]** are not established.
+Status: **design, with a first simulation** (`crates/lamp-model`, section 9). It replaces drafts 1 to 4. Statements marked **[ASSUMPTION]** are not established.
 
 ## 1. The idea
 
@@ -45,19 +45,22 @@ as a feed.
 Write `z = (x, cos phi_k, sin phi_k for k = 1..M)` for everything the lamp can refer to about itself.
 
 ```
-L1  dx = f(z) dt + sigma dW                         f(z) = -K (x - m) + sum_j theta_j g_j(z)
-L2  dx = f(z) dt + sum_feeds B_f u_f(t) dt + sigma dW           (while feeds are present)
-    d phi_k = omega_k dt + entrainment(feeds, k)                 (only while feeds are present)
-L3  d theta = eps * ( dx/dt - f(z) ) * g(z)         (only while a feed is present)
-            - theta / H                              (slow forgetting)
+L1  dx = ( -K (x - m) + replay(z) ) dt + sigma dW            replay(z) = sum_j theta_j g_j(z)      (no feed present)
+L2  dx = ( -K (x - m) + push(t) ) dt + sigma dW              push = sum_feeds B_f u_f(t)           (feed present)
+    d phi_k = omega_k dt + entrainment(state, k) dt          (only while a feed is present)
+L3  d theta = eps * ( push - replay(z) ) * g(z) dt           (only while a feed is present)
+            - theta / H dt                                    (slow forgetting)
 L0  light = Limit( x ) + breathing(t)
 ```
 
 - `theta = 0` at birth, so a newborn lamp is the mean-reverting random process of L1 with clocks that tick.
-- Aligned, the feed's push `B_f u_f` is added to the drift. Because `f` pulls back, alignment fades when the feed stops.
-- **Imprint is regression of the observed drift on the lamp's own state and phases.** It learns the average push the
-  world gave at each state and phase, so it teaches the free-running lamp to do on its own what the feed made it do.
-  `eps` is small, so only repeated patterns leave a mark.
+- **While a feed is present the world's push drives the lamp and replaces the imprint; when it is silent the imprint is
+  replayed.** The total forcing is the same in both modes, so a lamp that has learned a feed does on its own what the
+  feed made it do. Because `-K (x - m)` pulls back, alignment fades when the feed stops.
+- **The imprint is a forward model of the world's pull:** least-squares regression of the push on the lamp's own state
+  and phases. `eps` is small, so only repeated patterns leave a mark. (Draft 4 regressed the observed drift minus the
+  imprint, `dx/dt - f`. Working the maths for the simulator showed that this equals the push itself, so the imprint
+  would grow for as long as a feed lasts and never converge. The version above converges to the average push.)
 - A periodic feed carries the state round a loop while the clocks lock to it. After it is gone the lamp keeps travelling
   the loop at the clocks' learned speed: a learned limit cycle with no outside time.
 - `Limit` and `breathing` are L0: smoothing, brightness ceiling, reversal cap and a fixed breathing wave. They are
@@ -105,18 +108,50 @@ the light's own state.
 
 ## 7. Where this is weakest
 
-- **Entrainment is not settled.** How a feed pulls a clock's phase and speed is the main open choice. Candidates: an
-  Adler-style coupling on a resonator tuned to each clock, or a phase-locked loop on the part of the state near its
-  frequency. It is decided by replay tests (P5), not by taste.
+- **Noise rejection.** Section 9: plain least-squares leaves a trace from a random feed. A coherence gate is needed.
+- **Entrainment** works in the simulation with a phase-locked loop on the part of the state near each clock's
+  frequency, but only for rhythms the clock ladder reaches, and only on synthetic feeds.
 - A small basis may not make a loop sharp enough for a "sunrise"; that would need more state or a richer basis (P8).
 - With several feeds at once their pushes add, and nothing yet decides which wins when they disagree.
 - Stability: the mean reversion in `K` must dominate the learned part of `f`.
 
 ## 8. Build order
 
-1. A pure, deterministic simulator of L1 to L3 and the clocks, with no lamp and no network, replayable faster than real
-   time.
-2. Tests P2 to P6 and the with-and-without-clocks comparison of P8, on synthetic feeds. If P5 fails, the idea changes
-   before anything else is built.
+1. ~~A pure, deterministic simulator of L1 to L3 and the clocks~~ (done: `crates/lamp-model`).
+2. ~~Tests P2 to P6 on synthetic feeds~~ (done, section 9). Still to do: the with-and-without-clocks comparison of P8, and
+   a coherence gate for noise.
 3. L0 and the output to the lamp, reproducing today's calm behaviour from the model alone.
 4. The feed channel, then the first real feeds.
+
+## 9. What the first simulation showed
+
+Run with `cargo test -p lamp-model -- --nocapture`. Time is scaled (clock periods from 100 s to about 4000 s, mean
+reversion over 600 s); the model has no absolute time unit, so only the ratios matter. Everything below is a result on
+synthetic feeds, not on the real lamp.
+
+**Held:**
+- **P5, persistence.** A sine feed of period 1500 s, which matches no clock (they sit at 1270 s and 1600 s), is learned:
+  a clock locks to within 0.04% of its speed after 30 periods of driving, and for the eight periods measured after the feed stops the lamp keeps oscillating at about
+  the driven amplitude (1.06 to 1.2 times it). The control (no learning, no entrainment) falls to 25% in the first
+  period and 2% in the second.
+- **Capture.** Sweeping the feed period from 0.85 to 1.18 times a clock's, a clock locks every time. The loop (a
+  second-order phase-locked loop on the strongest oscillation of the state) is a workable form of entrainment.
+- **Limits of reach.** A feed of period 9000 s, beyond every clock, is not followed (5% retained). The lamp learns only
+  rhythms its clocks reach, as section 2 says.
+- **P6, frame rate.** Spread and autocorrelation agree at 0.1 s, 1 s and 6 s steps.
+- **P2.** Alone, the imprint stays exactly zero and the clocks do not change speed.
+- **P4.** The trace grows with repetition (2.4 times larger after eight episodes than after one) and, with
+  no feed, halves in one half-life. The growth is slower than a first-order guess because forgetting competes with
+  learning: the trace settles at `learning / (learning + forgetting)` of full size, so `H` must be much longer than the
+  gap between episodes.
+
+**Did not hold as first written:**
+- **P3, noise leaves no mark.** False for plain least-squares. A random feed of the same size leaves a trace that
+  falls with learning rate (0.87, 0.50, 0.46 and 0.35 of the real rhythm's at four rates) but does not vanish. Slower
+  learning helps, at the cost of slower imprinting. Rejecting noise properly needs a rule that learns only what repeats
+  coherently across periods (a gate), which is the intent of "only repetition leaves a lasting mark". Open.
+- The replayed amplitude is 1.06 to 1.2 times the driven one, not exactly 1: the imprint spreads across neighbouring
+  clocks that lock to the same feed. Harmless for light, but not exact.
+
+**Not yet tested:** the P8 comparison with and without the clocks; several feeds at once; the output limits (L0); the
+real lamp.

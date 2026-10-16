@@ -316,6 +316,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "lamp-model"
+version = "0.0.1"
+
+[[package]]
 name = "lampbus-life"
 version = "0.0.1"
 

@@ -1,0 +1,14 @@
+[package]
+name = "lamp-model"
+version = "0.0.1"
+description = "A deterministic simulator of the living lamp's inner model (docs/MODEL.md): no lamp, no network, no clock"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

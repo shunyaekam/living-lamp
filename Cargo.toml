@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["apps/*"]
+members = ["apps/*", "crates/*"]
 
 [workspace.package]
 edition = "2021"
@@ -24,3 +24,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+
+# the simulator's experiments run millions of steps; keep `cargo test` quick without a release build
+[profile.dev.package.lamp-model]
+opt-level = 3
