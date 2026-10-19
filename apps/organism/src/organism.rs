@@ -24,7 +24,7 @@ pub const LIMITS: LimitConfig = LimitConfig {
 pub fn config() -> Config {
     let mut c = Config::new(geometric(600.0, 700_000.0, 1.26));
     // an ember by day: warm orange at about a fifth of full brightness, where the lamp has room to move
-    c.mean = [0.84, 0.30, 0.22];
+    c.mean = [0.84, 0.30, 0.26];
     // wanders over a few minutes: about +-0.075 in colour and +-0.03 in level at a liveliness of 1
     c.rate = [1.0 / 200.0; DIMS];
     c.noise = [0.0075, 0.0075, 0.003];
@@ -144,17 +144,19 @@ impl Organism {
     /// How lively the organism is at rest: breathing, flicker and wander all scale with it.
     pub fn set_lively(&mut self, lively: f64) {
         self.lively = lively.clamp(0.0, 4.0);
-        // signs of life, all scaled by one dial: a breath, a quick flicker, and a stir about every minute that lifts the
-        // level by about a quarter and warms the colour a little before it settles
-        self.limits.set_life(0.22 * self.lively, 0.10 * self.lively);
+        // signs of life, all scaled by one dial: a breath, a quick flicker, a stir every 45 seconds or so that lifts the
+        // level by about a quarter and warms the colour a little before it settles, and a hue that drifts a long way over
+        // a minute or two, through many colours, always fully saturated
+        self.limits.set_life(0.25 * self.lively, 0.12 * self.lively);
         self.limits.set_stir(
             if self.lively > 0.0 {
-                60.0 / self.lively.max(0.5)
+                45.0 / self.lively.max(0.5)
             } else {
                 0.0
             },
             0.30 * self.lively.min(1.6),
         );
+        self.limits.set_sway(85.0 * self.lively.min(1.9));
         self.model.set_noise_scale(self.lively);
     }
 
@@ -422,6 +424,7 @@ mod tests {
     #[test]
     fn releasing_lets_the_lamp_ease_back_to_its_own_ember() {
         let mut o = Organism::new(9);
+        o.set_lively(0.0); // this test is about the hand-back, not the sway
         o.handle(
             Msg::Look {
                 rgb: [0.0, 0.0, 255.0],
@@ -522,19 +525,29 @@ mod tests {
         let mut o = Organism::new(5);
         let dt = 0.05;
         let mut max_level = 0.0f64;
+        let (mut red, mut blue, mut n) = (0.0, 0.0, 0.0);
         let mut t = 0.0;
-        for _ in 0..40_000 {
+        for _ in 0..(6.0 * 3600.0 / dt) as usize {
             if let Some(l) = o.tick(dt, t) {
                 max_level = max_level.max(l.level);
+                red += f64::from(l.rgb[0]);
+                blue += f64::from(l.rgb[2]);
+                n += 1.0;
             }
             t += dt;
         }
+        // it sways through many colours, but its home is warm: over hours it is more red than blue
+        assert!(
+            red / n > blue / n + 40.0,
+            "warm on average: red {:.0}, blue {:.0}",
+            red / n,
+            blue / n
+        );
         assert!(
             max_level <= 65.0 + 1e-9,
             "its own light stays below its ceiling: {max_level}"
         );
-        let l = o.tick(dt, t).unwrap();
-        assert!(l.rgb[0] > l.rgb[2], "warm, not blue: {:?}", l.rgb);
+        let _ = t;
     }
 
     #[test]
@@ -603,6 +616,7 @@ mod tests {
     #[test]
     fn the_agent_pulls_the_lamp_and_lets_go_when_idle() {
         let mut o = Organism::new(6);
+        o.set_lively(0.0); // this test is about the hand-back, not the sway
         o.handle(Msg::Agent(Agent::Error), 0.0).unwrap();
         let (l, t) = run(&mut o, 0.0, 4.0);
         let red = l.unwrap().rgb;

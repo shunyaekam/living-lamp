@@ -437,3 +437,54 @@ fn stirring_happens_at_random_about_as_often_as_asked_and_fades_when_the_world_t
         - held.iter().copied().fold(f64::MAX, f64::min);
     assert!(spread < 1e-6, "no stirs while driven: {spread}");
 }
+
+#[test]
+fn the_hue_sways_far_stays_saturated_and_stops_when_the_world_takes_over() {
+    let cfg = LimitConfig {
+        tau: 0.4,
+        tau_fast: 0.03,
+        ceiling: 1.0,
+        ceiling_fast: 1.0,
+        max_rate: 4.0,
+        min_reversal_gap: 0.0,
+        gap_fast: 0.0,
+    };
+    let dt = 0.1;
+    let want: [f64; 3] = [0.84, 0.30, 0.25];
+    let sat = want[0].hypot(want[1]);
+    let base = want[1].atan2(want[0]);
+    let mut l = Autonomic::new(cfg, 0.0, 7.0);
+    l.set_sway(60.0);
+    let mut angles = Vec::new();
+    for _ in 0..(3.0 * 3600.0 / dt) as usize {
+        let x = l.apply_aroused(dt, want, 0.0);
+        assert!(
+            (x[0].hypot(x[1]) - sat).abs() < 1e-6,
+            "the colour stays as saturated as it was: {x:?}"
+        );
+        let mut d = x[1].atan2(x[0]) - base;
+        d = (d + std::f64::consts::PI).rem_euclid(TAU) - std::f64::consts::PI;
+        angles.push(d.to_degrees());
+    }
+    let mean = angles.iter().sum::<f64>() / angles.len() as f64;
+    let sd = (angles.iter().map(|a| (a - mean).powi(2)).sum::<f64>() / angles.len() as f64).sqrt();
+    let (lo, hi) = (
+        angles.iter().copied().fold(f64::MAX, f64::min),
+        angles.iter().copied().fold(f64::MIN, f64::max),
+    );
+    println!("hue sway over three hours: standard deviation {sd:.0} degrees (asked for 60), reaching {lo:.0} to {hi:.0}");
+    assert!((sd - 60.0).abs() < 18.0, "about the asked-for sway: {sd}");
+    assert!(
+        hi - lo > 150.0,
+        "it travels through many colours: {lo} to {hi}"
+    );
+    let mut driven = Autonomic::new(cfg, 0.0, 7.0);
+    driven.set_sway(60.0);
+    for _ in 0..3000 {
+        let x = driven.apply_aroused(dt, want, 1.0);
+        assert!(
+            (x[0] - want[0]).abs() < 1e-6 && (x[1] - want[1]).abs() < 1e-6,
+            "no sway while driven"
+        );
+    }
+}

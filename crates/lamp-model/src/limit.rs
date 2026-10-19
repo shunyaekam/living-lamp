@@ -153,6 +153,9 @@ pub struct Autonomic {
     t: f64,
     flicker_depth: f64,
     flicker: [f64; 3],
+    /// How far the hue sways either side of the baseline (standard deviation, in radians), and the slow noise that drives it.
+    sway: f64,
+    sway_state: [f64; 3],
     /// Mean seconds between spontaneous stirs (0 turns stirring off), and how far a stir lifts the level.
     stir_every: f64,
     stir_boost: f64,
@@ -164,6 +167,9 @@ pub struct Autonomic {
 
 /// Time constant of each of the flicker's three smoothing stages, in seconds: about two shimmers a second.
 const FLICKER_TAU: f64 = 0.25;
+
+/// Time constant of each of the hue sway's three smoothing stages, in seconds: a hue that drifts over about half a minute.
+const SWAY_TAU: f64 = 5.0;
 
 /// The variance of three cascaded one-pole filters driven by white noise of unit density is 0.1875 / tau; this scales the
 /// noise so the flicker has a standard deviation of 1 (checked by a test at two frame rates).
@@ -181,6 +187,8 @@ impl Autonomic {
             t: 0.0,
             flicker_depth: 0.0,
             flicker: [0.0; 3],
+            sway: 0.0,
+            sway_state: [0.0; 3],
             stir_every: 0.0,
             stir_boost: 0.0,
             next_stir: f64::INFINITY,
@@ -194,6 +202,12 @@ impl Autonomic {
     pub fn set_life(&mut self, breath: f64, flicker: f64) {
         self.depth = breath.max(0.0);
         self.flicker_depth = flicker.max(0.0);
+    }
+
+    /// Let the hue sway slowly either side of the colour the lamp wants, by `degrees` (one standard deviation), over a minute
+    /// or two. The colour is rotated round the disc, so it stays as saturated as it was. Fades out as the world takes over.
+    pub fn set_sway(&mut self, degrees: f64) {
+        self.sway = degrees.max(0.0).to_radians();
     }
 
     /// Turn spontaneous stirring on or off: about every `every` seconds the lamp brightens by `boost` (in level units) and
@@ -239,8 +253,15 @@ impl Autonomic {
         self.stirred += (self.excitement - self.stirred) * (1.0 - (-dt / 0.8).exp());
         let lift = self.stir_boost * calm * self.stirred;
         x[2] += lift;
+        // the hue sways on slow noise (the same three-stage smoother as the flicker, with a much longer time constant)
+        let sway_alpha = 1.0 - (-dt / SWAY_TAU).exp();
+        let mut sway_in = self.rng.normal() * (SWAY_TAU / (FLICKER_NORM * dt.max(1e-9))).sqrt();
+        for stage in &mut self.sway_state {
+            *stage += sway_alpha * (sway_in - *stage);
+            sway_in = *stage;
+        }
         // and the colour warms a little toward yellow while it is stirred
-        let turn = 0.14 * calm * self.stirred;
+        let turn = 0.14 * calm * self.stirred + self.sway * calm * self.sway_state[2];
         let (s, c) = turn.sin_cos();
         let (a, b) = (x[0] * c - x[1] * s, x[0] * s + x[1] * c);
         x[0] = a;
