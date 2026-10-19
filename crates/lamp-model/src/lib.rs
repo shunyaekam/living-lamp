@@ -161,6 +161,7 @@ pub struct Model {
     /// The imprint: for each parameter, a weight per feature.
     theta: [Vec<f64>; DIMS],
     rng: Rng,
+    noise_scale: f64,
 }
 
 impl Model {
@@ -200,7 +201,13 @@ impl Model {
             ],
             cfg,
             rng,
+            noise_scale: 1.0,
         }
+    }
+
+    /// Scale the noise that keeps the lamp moving (1 is the configured amount).
+    pub fn set_noise_scale(&mut self, scale: f64) {
+        self.noise_scale = scale.clamp(0.0, 10.0);
     }
 
     /// What the lamp has learned, as text: the clocks' speeds and the imprint. The light's state and the clocks' phases are
@@ -370,7 +377,7 @@ impl Model {
             let k = (self.cfg.rate[i] + spring).max(1e-12);
             let e = (-k * dt).exp();
             let rest = (self.cfg.rate[i] * self.cfg.mean[i] + forcing[i]) / k;
-            let sd = self.cfg.noise[i] * ((1.0 - e * e) / (2.0 * k)).sqrt();
+            let sd = self.cfg.noise[i] * self.noise_scale * ((1.0 - e * e) / (2.0 * k)).sqrt();
             self.x[i] = rest + e * (before[i] - rest) + sd * self.rng.normal();
         }
         if self.cfg.basis == Basis::Clocks {

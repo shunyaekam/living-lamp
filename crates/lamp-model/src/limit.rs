@@ -5,7 +5,7 @@
 //! bound how often a light changes direction, so the governor does: a parameter may reverse only after a minimum gap, which
 //! bounds reversals by construction.
 
-use crate::DIMS;
+use crate::{Rng, DIMS};
 use std::f64::consts::TAU;
 
 /// Limits, set once.
@@ -32,6 +32,8 @@ pub struct LimitConfig {
 pub struct Limit {
     cfg: LimitConfig,
     stages: [[f64; DIMS]; 3],
+    /// The shaped light before breathing and flicker: what the slew limit works from.
+    shaped: [f64; DIMS],
     out: [f64; DIMS],
     good: [f64; DIMS],
     started: bool,
@@ -47,6 +49,7 @@ impl Limit {
         Limit {
             cfg,
             stages: [[0.0; DIMS]; 3],
+            shaped: [0.0; DIMS],
             out: [0.0; DIMS],
             good: [0.0; DIMS],
             started: false,
@@ -89,6 +92,7 @@ impl Limit {
         self.good = want;
         if !self.started {
             self.stages = [want; 3];
+            self.shaped = want;
             self.out = want;
             self.started = true;
         }
@@ -105,11 +109,12 @@ impl Limit {
         }
         self.t += dt;
         let step = self.cfg.max_rate * dt;
-        let mut next = self.out;
+        let mut next = self.shaped;
         for i in 0..DIMS {
             next[i] += (input[i] - next[i]).clamp(-step, step);
         }
-        self.clamp(next)
+        self.shaped = self.clamp(next);
+        self.shaped
     }
 
     /// The reversal governor: a parameter turns round only after the minimum gap since it last did; until then it holds.
@@ -138,7 +143,7 @@ impl Limit {
     }
 }
 
-/// The limiter plus a fixed breathing wave on the level.
+/// The limiter plus the lamp's two signs of life on the level: a breathing wave and a quick, small flicker.
 #[derive(Clone, Debug)]
 pub struct Autonomic {
     limit: Limit,
@@ -146,7 +151,23 @@ pub struct Autonomic {
     period: f64,
     phase: f64,
     t: f64,
+    flicker_depth: f64,
+    flicker: [f64; 3],
+    /// Mean seconds between spontaneous stirs (0 turns stirring off), and how far a stir lifts the level.
+    stir_every: f64,
+    stir_boost: f64,
+    next_stir: f64,
+    excitement: f64,
+    stirred: f64,
+    rng: Rng,
 }
+
+/// Time constant of each of the flicker's three smoothing stages, in seconds: about two shimmers a second.
+const FLICKER_TAU: f64 = 0.25;
+
+/// The variance of three cascaded one-pole filters driven by white noise of unit density is 0.1875 / tau; this scales the
+/// noise so the flicker has a standard deviation of 1 (checked by a test at two frame rates).
+const FLICKER_NORM: f64 = 0.1875;
 
 impl Autonomic {
     /// `depth` is the fraction of the level the breathing swings by; `period` its mean length in seconds. The period
@@ -158,6 +179,33 @@ impl Autonomic {
             period,
             phase: 0.0,
             t: 0.0,
+            flicker_depth: 0.0,
+            flicker: [0.0; 3],
+            stir_every: 0.0,
+            stir_boost: 0.0,
+            next_stir: f64::INFINITY,
+            excitement: 0.0,
+            stirred: 0.0,
+            rng: Rng::new(0xf11c_c0de),
+        }
+    }
+
+    /// Set the depth of the breathing and of the flicker, as fractions of the level. Both fade out as the world takes over.
+    pub fn set_life(&mut self, breath: f64, flicker: f64) {
+        self.depth = breath.max(0.0);
+        self.flicker_depth = flicker.max(0.0);
+    }
+
+    /// Turn spontaneous stirring on or off: about every `every` seconds the lamp brightens by `boost` (in level units) and
+    /// warms a little, then settles, as an ember does when it is poked by the air. `every` of 0 turns it off. Stirs fade out
+    /// as the world takes over, like breathing.
+    pub fn set_stir(&mut self, every: f64, boost: f64) {
+        self.stir_every = every.max(0.0);
+        self.stir_boost = boost.max(0.0);
+        if self.stir_every == 0.0 {
+            self.next_stir = f64::INFINITY;
+        } else if !self.next_stir.is_finite() {
+            self.next_stir = self.t + self.stir_every * self.rng.uniform().max(0.1);
         }
     }
 
@@ -172,6 +220,31 @@ impl Autonomic {
         self.t += dt;
         let wander = 1.0 + 0.15 * (TAU * self.t / (self.period * 7.3)).sin();
         self.phase = (self.phase + TAU * dt / (self.period * wander)).rem_euclid(TAU);
+        // the flicker is white noise through three smoothing stages, scaled to a standard deviation of one
+        let alpha = 1.0 - (-dt / FLICKER_TAU).exp();
+        let mut input = self.rng.normal() * (FLICKER_TAU / (FLICKER_NORM * dt.max(1e-9))).sqrt();
+        for stage in &mut self.flicker {
+            *stage += alpha * (input - *stage);
+            input = *stage;
+        }
+        let calm = 1.0 - arousal.clamp(0.0, 1.0);
+        x[2] *= 1.0 + self.flicker_depth * calm * self.flicker[2];
+        // stirring: a random kick of excitement that decays over a few seconds and is felt through a soft attack
+        if self.t >= self.next_stir && self.stir_every > 0.0 {
+            self.excitement = (self.excitement + 1.0).min(1.6);
+            let wait = -(1.0 - self.rng.uniform()).ln() * self.stir_every;
+            self.next_stir = self.t + wait.max(8.0);
+        }
+        self.excitement *= (-dt / 4.0).exp();
+        self.stirred += (self.excitement - self.stirred) * (1.0 - (-dt / 0.8).exp());
+        let lift = self.stir_boost * calm * self.stirred;
+        x[2] += lift;
+        // and the colour warms a little toward yellow while it is stirred
+        let turn = 0.14 * calm * self.stirred;
+        let (s, c) = turn.sin_cos();
+        let (a, b) = (x[0] * c - x[1] * s, x[0] * s + x[1] * c);
+        x[0] = a;
+        x[1] = b;
         // breathing is the lamp at rest: it fades out as the world takes over, so a commanded level is shown faithfully
         x[2] *= 1.0 + self.depth * (1.0 - arousal.clamp(0.0, 1.0)) * self.phase.sin();
         // the governor comes last, so the bound on reversals covers everything that is shown, breathing included

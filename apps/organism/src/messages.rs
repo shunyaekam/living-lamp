@@ -36,6 +36,8 @@ pub enum Msg {
     Agent(Agent),
     /// A person lets go: their colour and the agent's stop pulling, and the lamp eases back to itself.
     Release,
+    /// How lively the organism is at rest: 0 is a still glow, 1 the default, more is more breathing, flicker and wander.
+    Lively(f64),
     /// Put the organism to sleep or wake it.
     Sleep,
     Wake,
@@ -67,6 +69,9 @@ pub fn parse(line: &str) -> Result<Msg, String> {
             other => Err(format!("unknown agent state {other:?}")),
         },
         "release" => Ok(Msg::Release),
+        "lively" => Ok(Msg::Lively(
+            number(Some(rest), "liveliness")?.clamp(0.0, 4.0),
+        )),
         "sleep" => Ok(Msg::Sleep),
         "wake" => Ok(Msg::Wake),
         "status" => Ok(Msg::Status),
@@ -170,6 +175,9 @@ mod tests {
         assert!(parse("agent dancing").is_err());
         assert_eq!(parse("status"), Ok(Msg::Status));
         assert_eq!(parse("release"), Ok(Msg::Release));
+        assert_eq!(parse("lively 1.5"), Ok(Msg::Lively(1.5)));
+        assert_eq!(parse("lively 99"), Ok(Msg::Lively(4.0)));
+        assert!(parse("lively").is_err());
         assert_eq!(parse("sleep"), Ok(Msg::Sleep));
     }
 

@@ -13,7 +13,7 @@ use lamp_model::{geometric, Config, Model, DIMS};
 pub const LIMITS: LimitConfig = LimitConfig {
     tau: 0.4,
     tau_fast: 0.03,
-    ceiling: 0.4,
+    ceiling: 0.65,
     ceiling_fast: 1.0,
     max_rate: 4.0,
     min_reversal_gap: 0.5,
@@ -23,8 +23,11 @@ pub const LIMITS: LimitConfig = LimitConfig {
 /// The organism's own nature when nothing drives it: a slow ember that breathes. Everything else is learned from feeds.
 pub fn config() -> Config {
     let mut c = Config::new(geometric(600.0, 700_000.0, 1.26));
-    c.mean = [0.80, 0.29, 0.12];
-    c.noise = [0.003, 0.003, 0.001];
+    // an ember by day: warm orange at about a fifth of full brightness, where the lamp has room to move
+    c.mean = [0.84, 0.30, 0.22];
+    // wanders over a few minutes: about +-0.075 in colour and +-0.03 in level at a liveliness of 1
+    c.rate = [1.0 / 200.0; DIMS];
+    c.noise = [0.0075, 0.0075, 0.003];
     c.eta = 1.0e-4;
     c.half_life = 7.0 * 86_400.0;
     c.gate = true;
@@ -80,6 +83,7 @@ pub struct Organism {
     awake: bool,
     delegated: bool,
     last_power_cmd: Option<f64>,
+    lively: f64,
     /// What the lamp last reported of its power (see `motor`).
     lamp_power: u8,
     outbox: Vec<String>,
@@ -92,7 +96,8 @@ impl Organism {
         let none = [0.0; DIMS];
         let person = feeds.add(FeedSpec {
             dir: none,
-            stiffness: 5.0,
+            // stiff, so a command is shown within about a fifth of a second
+            stiffness: 20.0,
             priority: 1.0e6,
             memory: 300.0,
         });
@@ -115,7 +120,7 @@ impl Organism {
             priority: 1.0e6,
             memory: 10.0,
         });
-        Organism {
+        let mut o = Organism {
             model: Model::new(config(), seed),
             feeds,
             limits: Autonomic::new(LIMITS, 0.12, 7.0),
@@ -128,9 +133,29 @@ impl Organism {
             awake: true,
             delegated: false,
             last_power_cmd: None,
+            lively: 1.0,
             lamp_power: motor::UNKNOWN,
             outbox: Vec::new(),
-        }
+        };
+        o.set_lively(1.0);
+        o
+    }
+
+    /// How lively the organism is at rest: breathing, flicker and wander all scale with it.
+    pub fn set_lively(&mut self, lively: f64) {
+        self.lively = lively.clamp(0.0, 4.0);
+        // signs of life, all scaled by one dial: a breath, a quick flicker, and a stir about every minute that lifts the
+        // level by about a quarter and warms the colour a little before it settles
+        self.limits.set_life(0.22 * self.lively, 0.10 * self.lively);
+        self.limits.set_stir(
+            if self.lively > 0.0 {
+                60.0 / self.lively.max(0.5)
+            } else {
+                0.0
+            },
+            0.30 * self.lively.min(1.6),
+        );
+        self.model.set_noise_scale(self.lively);
     }
 
     /// What the model has learned, as text (see [`Model::save`]).
@@ -212,6 +237,7 @@ impl Organism {
                     self.wake(now);
                 }
             }
+            Msg::Lively(x) => self.set_lively(x),
             Msg::Release => {
                 self.feeds.clear(self.person);
                 self.feeds.clear(self.agent);
@@ -237,9 +263,10 @@ impl Organism {
             Msg::Status => {
                 let x = self.model.state();
                 return Ok(format!(
-                    "awake={} delegated={} state=({:.3},{:.3},{:.3}) imprint={:.5}",
+                    "awake={} delegated={} lively={} state=({:.3},{:.3},{:.3}) imprint={:.5}",
                     self.awake,
                     self.delegated,
+                    self.lively,
                     x[0],
                     x[1],
                     x[2],
@@ -503,11 +530,74 @@ mod tests {
             t += dt;
         }
         assert!(
-            max_level <= 40.0 + 1e-9,
-            "its own light stays gentle: {max_level}"
+            max_level <= 65.0 + 1e-9,
+            "its own light stays below its ceiling: {max_level}"
         );
         let l = o.tick(dt, t).unwrap();
         assert!(l.rgb[0] > l.rgb[2], "warm, not blue: {:?}", l.rgb);
+    }
+
+    #[test]
+    fn liveliness_scales_how_much_the_lamp_moves_at_rest_and_not_what_a_person_asks_for() {
+        let spread = |lively: f64| {
+            let mut o = Organism::new(21);
+            o.set_lively(lively);
+            let dt = 0.025;
+            let levels: Vec<f64> = (0..(3600.0 / dt) as usize)
+                .filter_map(|k| o.tick(dt, k as f64 * dt))
+                .map(|l| l.level)
+                .collect();
+            let mean = levels.iter().sum::<f64>() / levels.len() as f64;
+            (levels.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / levels.len() as f64).sqrt()
+        };
+        let (still, normal, lively) = (spread(0.0), spread(1.0), spread(2.0));
+        println!("level spread over an hour at liveliness 0, 1 and 2: {still:.3} {normal:.3} {lively:.3}");
+        assert!(still < 0.001 && normal > 3.0 * still.max(0.001) && lively > 1.3 * normal);
+        // a person's level is shown steadily whatever the liveliness
+        let mut o = Organism::new(22);
+        o.set_lively(3.0);
+        o.handle(
+            Msg::Look {
+                rgb: [255.0, 0.0, 0.0],
+                percent: Some(70.0),
+            },
+            0.0,
+        )
+        .unwrap();
+        let levels: Vec<f64> = (0..400)
+            .filter_map(|k| o.tick(0.025, f64::from(k) * 0.025))
+            .skip(200)
+            .map(|l| l.level)
+            .collect();
+        let (lo, hi) = (
+            levels.iter().copied().fold(f64::MAX, f64::min),
+            levels.iter().copied().fold(f64::MIN, f64::max),
+        );
+        assert!(hi - lo < 1.0, "steady while a person drives: {lo} to {hi}");
+    }
+
+    #[test]
+    fn a_persons_colour_arrives_within_a_fifth_of_a_second() {
+        let mut o = Organism::new(23);
+        o.handle(
+            Msg::Look {
+                rgb: [0.0, 0.0, 255.0],
+                percent: Some(60.0),
+            },
+            0.0,
+        )
+        .unwrap();
+        let dt = 0.025;
+        let mut at = None;
+        for k in 0..80 {
+            let l = o.tick(dt, f64::from(k) * dt).unwrap();
+            if at.is_none() && l.rgb[2] >= 230 && l.rgb[0] <= 25 && (l.level - 60.0).abs() < 6.0 {
+                at = Some(f64::from(k + 1) * dt);
+            }
+        }
+        let t = at.unwrap_or(f64::INFINITY);
+        println!("a person's colour is within 10% after {t:.3} s");
+        assert!(t < 0.4, "{t}");
     }
 
     #[test]
@@ -515,7 +605,8 @@ mod tests {
         let mut o = Organism::new(6);
         o.handle(Msg::Agent(Agent::Error), 0.0).unwrap();
         let (l, t) = run(&mut o, 0.0, 4.0);
-        assert_eq!(l.unwrap().rgb, [255, 0, 0]);
+        let red = l.unwrap().rgb;
+        assert!(red[0] >= 253 && red[1] <= 3 && red[2] <= 3, "{red:?}");
         o.handle(Msg::Agent(Agent::Idle), t).unwrap();
         let (l, _) = run(&mut o, t, 600.0);
         assert!(

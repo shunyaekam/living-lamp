@@ -344,3 +344,96 @@ fn breathing_belongs_to_the_lamp_at_rest_and_fades_as_the_world_takes_over() {
     assert!(rest > 0.05, "at rest the lamp breathes");
     assert!(driven < 0.002, "a commanded level is shown steadily");
 }
+
+#[test]
+fn the_flicker_is_a_quick_small_shimmer_that_fades_as_the_world_takes_over() {
+    let cfg = LimitConfig {
+        tau: 0.4,
+        tau_fast: 0.03,
+        ceiling: 1.0,
+        ceiling_fast: 1.0,
+        max_rate: 4.0,
+        min_reversal_gap: 0.0, // let the governor stay out of the way: this measures the flicker itself
+        gap_fast: 0.0,
+    };
+    for dt in [0.025, 0.05] {
+        let mut l = Autonomic::new(cfg, 0.0, 7.0);
+        l.set_life(0.0, 0.10);
+        let levels: Vec<f64> = (0..(600.0 / dt) as usize)
+            .map(|_| l.apply_aroused(dt, [0.0, 0.0, 0.5], 0.0)[2])
+            .collect();
+        let mean = levels.iter().sum::<f64>() / levels.len() as f64;
+        let sd = (levels.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / levels.len() as f64)
+            .sqrt()
+            / mean;
+        println!("dt {dt}: flicker standard deviation {sd:.3} of the level (asked for 0.100)");
+        assert!(
+            (sd - 0.10).abs() < 0.02,
+            "the asked-for depth at dt {dt}: {sd}"
+        );
+        let mut driven = Autonomic::new(cfg, 0.0, 7.0);
+        driven.set_life(0.0, 0.10);
+        let held: Vec<f64> = (0..2000)
+            .map(|_| driven.apply_aroused(dt, [0.0, 0.0, 0.5], 1.0)[2])
+            .collect();
+        let spread = held.iter().copied().fold(f64::MIN, f64::max)
+            - held.iter().copied().fold(f64::MAX, f64::min);
+        assert!(
+            spread < 1e-6,
+            "no flicker when the world is driving: {spread}"
+        );
+    }
+}
+
+#[test]
+fn stirring_happens_at_random_about_as_often_as_asked_and_fades_when_the_world_takes_over() {
+    let cfg = LimitConfig {
+        tau: 0.4,
+        tau_fast: 0.03,
+        ceiling: 1.0,
+        ceiling_fast: 1.0,
+        max_rate: 4.0,
+        min_reversal_gap: 0.0,
+        gap_fast: 0.0,
+    };
+    let dt = 0.05;
+    let mut l = Autonomic::new(cfg, 0.0, 7.0);
+    l.set_stir(60.0, 0.30);
+    let hour = (3600.0 / dt) as usize;
+    let levels: Vec<f64> = (0..hour)
+        .map(|_| l.apply_aroused(dt, [0.8, 0.3, 0.2], 0.0)[2])
+        .collect();
+    // count the rises of at least half the boost that start from the resting level
+    let (mut stirs, mut armed) = (0, true);
+    for v in &levels {
+        if armed && *v > 0.2 + 0.15 {
+            stirs += 1;
+            armed = false;
+        }
+        if *v < 0.2 + 0.05 {
+            armed = true;
+        }
+    }
+    println!(
+        "{stirs} stirs in an hour, asked for about 60 (a stir is felt as a rise of 0.15 or more)"
+    );
+    assert!(
+        (30..=75).contains(&stirs),
+        "about every minute, at random: {stirs}"
+    );
+    let peak = levels.iter().copied().fold(0.0, f64::max);
+    // the soft attack means a stir is felt as about 0.8 of its boost, and two close together add up
+    assert!(
+        peak > 0.2 + 0.20 && peak < 0.2 + 0.30 * 1.7,
+        "a stir lifts the level by about the boost: {peak}"
+    );
+    // while the world drives, nothing stirs
+    let mut driven = Autonomic::new(cfg, 0.0, 7.0);
+    driven.set_stir(5.0, 0.30);
+    let held: Vec<f64> = (0..hour / 4)
+        .map(|_| driven.apply_aroused(dt, [0.8, 0.3, 0.2], 1.0)[2])
+        .collect();
+    let spread = held.iter().copied().fold(f64::MIN, f64::max)
+        - held.iter().copied().fold(f64::MAX, f64::min);
+    assert!(spread < 1e-6, "no stirs while driven: {spread}");
+}

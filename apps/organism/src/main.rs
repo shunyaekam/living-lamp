@@ -31,11 +31,11 @@ OPTIONS
   --to host:port        lampbus's UDP stream input (default 127.0.0.1:8789)
   --lampbus host:port   lampbus's HTTP API, for power and relayed effects (default 127.0.0.1:8787)
   --state FILE          where what it has learned is kept (default ~/.local/state/living-lamp/model)
-  --fps N               frames per second (default 20)
+  --fps N               frames per second (default 40; lampbus writes at most 40 a second)
   --seed N              random seed (default: from the clock)
 
 MESSAGES  person look R G B [PERCENT] | person brightness PERCENT | person power on|off|toggle | person act JSON
-          agent working|done|needs-you|error|idle | sleep | wake | status";
+          agent working|done|needs-you|error|idle | lively 0..4 | release | sleep | wake | status";
 
 struct Opts {
     listen: String,
@@ -74,7 +74,7 @@ fn parse_opts(args: Vec<String>) -> Result<Option<Opts>, String> {
         to: "127.0.0.1:8789".into(),
         lampbus: "127.0.0.1:8787".into(),
         state: home().join(".local/state/living-lamp/model"),
-        fps: 20.0,
+        fps: 40.0,
         seed: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(1, |d| d.as_nanos() as u64),
